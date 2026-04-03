@@ -5,6 +5,8 @@ import SearchBar from "@/components/SearchBar";
 import Pagination from "@/components/Pagination";
 import { Suspense } from "react";
 
+export const dynamic = "force-dynamic";
+
 const PAGE_SIZE = 20;
 
 interface Props {

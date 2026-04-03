@@ -3,6 +3,8 @@ import { DocumentWithFiles, OPP_SE_LABELS, formatDate, formatFileSize } from "@/
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+export const dynamic = "force-dynamic";
+
 interface Props {
   params: { id: string };
 }

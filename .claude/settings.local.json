@@ -7,7 +7,13 @@
       "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth status)",
       "Bash(\"/c/Users/Windows11 K/AppData/Local/Programs/GitHub CLI/gh.exe\" auth status)",
       "Read(//c/Program Files/GitHub CLI//**)",
-      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth login --web)"
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth login --web)",
+      "mcp__7c830bcd-a98b-4bde-b7bd-fc737a9a281f__list_organizations",
+      "mcp__7c830bcd-a98b-4bde-b7bd-fc737a9a281f__get_project_url",
+      "Bash(where vercel:*)",
+      "Bash(npm list:*)",
+      "Bash(npx vercel:*)",
+      "Bash(npx next:*)"
     ]
   }
 }

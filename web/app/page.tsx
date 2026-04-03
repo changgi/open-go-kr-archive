@@ -3,40 +3,20 @@ import { Document } from "@/lib/types";
 import DocumentCard from "@/components/DocumentCard";
 import Link from "next/link";
 
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const supabase = createServerSupabase();
 
-  const [
-    { count: totalCount },
-    { data: recentDocs },
-    { data: todayDocs },
-    { data: topInstt },
-    { data: lastRun },
-  ] = await Promise.all([
-    supabase.from("documents").select("*", { count: "exact", head: true }),
-    supabase
-      .from("documents")
-      .select("*")
-      .order("collected_at", { ascending: false })
-      .limit(10),
-    supabase
-      .from("documents")
-      .select("*", { count: "exact", head: true })
-      .gte("collected_at", new Date().toISOString().slice(0, 10)),
-    supabase.rpc("get_top_institutions").limit(5).catch(() => ({ data: null })),
-    supabase
-      .from("collection_runs")
-      .select("*")
-      .order("started_at", { ascending: false })
-      .limit(1),
-  ]);
+  const totalRes = await supabase.from("documents").select("*", { count: "exact", head: true });
+  const recentRes = await supabase.from("documents").select("*").order("collected_at", { ascending: false }).limit(10);
+  const todayRes = await supabase.from("documents").select("*", { count: "exact", head: true }).gte("collected_at", new Date().toISOString().slice(0, 10));
+  const lastRunRes = await supabase.from("collection_runs").select("*").order("started_at", { ascending: false }).limit(1);
 
-  const recent = (recentDocs || []) as Document[];
-  const total = totalCount || 0;
-  const todayTotal = todayDocs?.count || 0;
-  const lastCollected = lastRun?.[0]?.finished_at || null;
+  const recent = (recentRes.data || []) as Document[];
+  const total = totalRes.count || 0;
+  const todayTotal = todayRes.count || 0;
+  const lastCollected = lastRunRes.data?.[0]?.finished_at || null;
 
   return (
     <div className="space-y-8">
