@@ -1,0 +1,39 @@
+name: Scheduled Collection
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: '검색어'
+        required: false
+        default: ''
+      max_count:
+        description: '최대 수집 건수'
+        required: false
+        default: '50'
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r collector/requirements.txt
+
+      - name: Run collector
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python collector/open_go_kr_collector.py \
+            -k "${{ github.event.inputs.keyword || '' }}" \
+            -n ${{ github.event.inputs.max_count || '50' }} \
+            -s $(date -d '-7 days' +%Y-%m-%d) \
+            -e $(date +%Y-%m-%d)
