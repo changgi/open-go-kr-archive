@@ -20,9 +20,11 @@ export default async function DocumentDetailPage({ params }: Props) {
 
   if (!doc) notFound();
 
-  const document = doc as DocumentWithFiles;
+  const document = doc as DocumentWithFiles & { prdctn_dt_raw?: string };
   const oppLabel = OPP_SE_LABELS[document.opp_se_cd || ""] || "-";
-  const detailUrl = `https://www.open.go.kr/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${document.prdctn_instt_regist_no}`;
+  const prdnDt = document.prdctn_dt_raw || (document.prdctn_dt ? document.prdctn_dt.replace(/-/g, '') + '000000' : '');
+  const nstSeCd = document.instt_se_cd || '';
+  const detailUrl = `https://www.open.go.kr/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${document.prdctn_instt_regist_no}&prdnDt=${prdnDt}&nstSeCd=${nstSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4`;
 
   const metaRows = [
     ["제목", document.info_sj],

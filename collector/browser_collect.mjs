@@ -197,7 +197,8 @@ async function main() {
       collected++;
       const regNo = doc.PRDCTN_INSTT_REGIST_NO || '';
       const title = htmlDecode(doc.INFO_SJ || '(제목 없음)');
-      const pDate = doc.P_DATE || '';
+      const prdnDt = doc.PRDCTN_DT || '';  // 14자리: YYYYMMDDHHmmss
+      const pDate = doc.P_DATE || prdnDt.slice(0, 8);  // 8자리: YYYYMMDD
       const insttNm = htmlDecode(doc.PROC_INSTT_NM || '');
       const deptNm = htmlDecode(doc.CHRG_DEPT_NM || '');
       const chargerNm = htmlDecode(doc.CHARGER_NM || '');
@@ -240,7 +241,7 @@ async function main() {
         md += `\n## 파일 목록\n\n`;
         fileNm.split('|').forEach(f => { if (f.trim()) md += `- ${f.trim()}\n`; });
       }
-      md += `\n## 원문 링크\n\n${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}\n`;
+      md += `\n## 원문 링크\n\n${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${insttSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4\n`;
 
       fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
 
@@ -253,6 +254,7 @@ async function main() {
         chrg_dept_nm: deptNm,
         charger_nm: chargerNm,
         prdctn_dt: pDate.length >= 8 ? `${pDate.slice(0,4)}-${pDate.slice(4,6)}-${pDate.slice(6,8)}` : null,
+        prdctn_dt_raw: prdnDt || null,
         unit_job_nm: unitJob,
         opp_se_cd: oppSeCd,
         opp_se_nm: oppLabel,
