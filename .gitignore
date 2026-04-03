@@ -33,3 +33,7 @@ Thumbs.db
 # Build
 *.tsbuildinfo
 .vercel
+collector/test_output/
+collector/_cmd.json
+collector/_run.cjs
+collector/cheliped-browser/
