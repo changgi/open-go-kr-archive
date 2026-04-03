@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(sort -u echo \"\" echo \"-- Web \\(all tsx/ts files\\):\" grep -roh 'from\\(\"\"\"\"documents\"\"\"\"\\)\\\\|from\\(\"\"\"\"files\"\"\"\"\\)\\\\|from\\(\"\"\"\"collection_runs\"\"\"\"\\)' \"C:/project_open/web/app/\")",
-      "Bash(sort -u echo \"\" echo \"-- MCP server:\" grep -roh 'from\\(\"\"\"\"documents\"\"\"\"\\)\\\\|from\\(\"\"\"\"files\"\"\"\"\\)\\\\|from\\(\"\"\"\"collection_runs\"\"\"\"\\)' \"C:/project_open/mcp-server/src/\")"
+      "Bash(sort -u echo \"\" echo \"-- MCP server:\" grep -roh 'from\\(\"\"\"\"documents\"\"\"\"\\)\\\\|from\\(\"\"\"\"files\"\"\"\"\\)\\\\|from\\(\"\"\"\"collection_runs\"\"\"\"\\)' \"C:/project_open/mcp-server/src/\")",
+      "Bash(where gh:*)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth status)",
+      "Bash(\"/c/Users/Windows11 K/AppData/Local/Programs/GitHub CLI/gh.exe\" auth status)",
+      "Read(//c/Program Files/GitHub CLI//**)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" auth login --web)"
     ]
   }
 }
