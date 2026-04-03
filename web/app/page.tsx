@@ -8,14 +8,14 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const supabase = createServerSupabase();
 
-  const totalRes = await supabase.from("documents").select("*", { count: "exact", head: true });
-  const recentRes = await supabase.from("documents").select("*").order("collected_at", { ascending: false }).limit(10);
-  const todayRes = await supabase.from("documents").select("*", { count: "exact", head: true }).gte("collected_at", new Date().toISOString().slice(0, 10));
+  const recentRes = await supabase.from("documents").select("*", { count: "exact" }).order("collected_at", { ascending: false }).limit(10);
+  const todayStr = new Date().toISOString().slice(0, 10) + "T00:00:00";
+  const todayRes = await supabase.from("documents").select("id", { count: "exact" }).gte("collected_at", todayStr);
   const lastRunRes = await supabase.from("collection_runs").select("*").order("started_at", { ascending: false }).limit(1);
 
   const recent = (recentRes.data || []) as Document[];
-  const total = totalRes.count || 0;
-  const todayTotal = todayRes.count || 0;
+  const total = recentRes.count ?? 0;
+  const todayTotal = todayRes.count ?? 0;
   const lastCollected = lastRunRes.data?.[0]?.finished_at || null;
 
   return (
