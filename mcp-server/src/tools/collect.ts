@@ -2,6 +2,7 @@ import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
+import fs from "fs";
 
 const execAsync = promisify(exec);
 
@@ -15,9 +16,8 @@ export const collectDocumentsSchema = z.object({
 export type CollectDocumentsInput = z.infer<typeof collectDocumentsSchema>;
 
 export async function collectDocuments(input: CollectDocumentsInput) {
-  const scriptPath =
-    process.env.COLLECTOR_SCRIPT_PATH ||
-    path.resolve(__dirname, "../../../collector/open_go_kr_collector.py");
+  const browserCollector = path.resolve(__dirname, "../../../collector/browser_collect.mjs");
+  const pythonCollector = path.resolve(__dirname, "../../../collector/open_go_kr_collector.py");
 
   const args: string[] = [];
   if (input.keyword) args.push(`-k "${input.keyword}"`);
@@ -25,7 +25,10 @@ export async function collectDocuments(input: CollectDocumentsInput) {
   if (input.startDate) args.push(`-s ${input.startDate}`);
   if (input.endDate) args.push(`-e ${input.endDate}`);
 
-  const command = `python "${scriptPath}" ${args.join(" ")}`;
+  const useBrowser = fs.existsSync(browserCollector);
+  const command = useBrowser
+    ? `node "${browserCollector}" ${args.join(" ")}`
+    : `python "${pythonCollector}" ${args.join(" ")}`;
 
   try {
     const { stdout, stderr } = await execAsync(command, {
