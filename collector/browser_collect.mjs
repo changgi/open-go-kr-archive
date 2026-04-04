@@ -69,27 +69,21 @@ const OPP_LABELS = { '1': '공개', '2': '부분공개', '3': '비공개', '5': 
 
 // ── Cheliped ──
 function cheliped(commands) {
-  const tmpFile = path.join(__dirname, '_cmd.json');
-  fs.writeFileSync(tmpFile, JSON.stringify(commands), 'utf8');
-
-  const wrapperFile = path.join(__dirname, '_run.cjs');
-  fs.writeFileSync(wrapperFile, `
-    const fs = require('fs');
-    const { execFileSync } = require('child_process');
-    const cmds = fs.readFileSync(${JSON.stringify(tmpFile)}, 'utf8');
-    const r = execFileSync('node', [${JSON.stringify(CLI_PATH)}, cmds], {
-      encoding: 'utf8', timeout: 120000, maxBuffer: 50 * 1024 * 1024,
-      cwd: ${JSON.stringify(CWD)}
-    });
-    process.stdout.write(r);
-  `, 'utf8');
-
+  const cmdsJson = JSON.stringify(commands);
   try {
-    return JSON.parse(execFileSync('node', [wrapperFile], {
-      encoding: 'utf8', timeout: 120000, maxBuffer: 50 * 1024 * 1024,
-    }));
+    const result = execFileSync('node', [CLI_PATH, cmdsJson], {
+      encoding: 'utf8',
+      timeout: 180000,
+      maxBuffer: 50 * 1024 * 1024,
+      cwd: CWD,
+    });
+    return JSON.parse(result);
   } catch (e) {
-    console.error('[cheliped]', (e.stdout || e.message || '').slice(0, 200));
+    // execFileSync throws on non-zero exit but stdout may still have valid JSON
+    if (e.stdout) {
+      try { return JSON.parse(e.stdout); } catch {}
+    }
+    console.error('[cheliped]', (e.message || '').slice(0, 200));
     return null;
   }
 }
@@ -106,22 +100,22 @@ function runJsInSession(jsCode) {
 let supabaseUrl = process.env.SUPABASE_URL;
 let supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
-function syncToSupabase(doc) {
+async function syncToSupabase(doc) {
   if (!supabaseUrl || !supabaseKey) return;
   try {
-    const js = `
-      var x = new XMLHttpRequest();
-      x.open("POST", "${supabaseUrl}/rest/v1/documents", false);
-      x.setRequestHeader("apikey", "${supabaseKey}");
-      x.setRequestHeader("Authorization", "Bearer ${supabaseKey}");
-      x.setRequestHeader("Content-Type", "application/json");
-      x.setRequestHeader("Prefer", "resolution=merge-duplicates");
-      x.send(JSON.stringify(${JSON.stringify(doc)}));
-      x.status;
-    `.replace(/\n/g, ' ');
-    runJsInSession(js);
+    const res = await fetch(`${supabaseUrl}/rest/v1/documents`, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(doc),
+    });
+    if (!res.ok) console.error(`  [Supabase] ${res.status}`);
   } catch (e) {
-    // Supabase sync failure is non-fatal
+    // non-fatal
   }
 }
 
@@ -129,17 +123,6 @@ function syncToSupabase(doc) {
 async function main() {
   const opts = parseArgs();
   console.log(`[수집 시작] 키워드='${opts.keyword}' 기간=${opts.startDate}~${opts.endDate} 최대=${opts.maxCount}건`);
-
-  // Navigate to site
-  console.log('[브라우저] open.go.kr 접속 중...');
-  const navResult = cheliped([
-    { cmd: 'goto', args: [`${BASE_URL}/othicInfo/infoList/orginlInfoList.do`] },
-  ]);
-  if (!navResult?.[0]?.result?.success) {
-    console.error('[실패] 사이트 접속 불가');
-    return;
-  }
-  console.log('[브라우저] 접속 성공');
 
   // Prepare output
   fs.mkdirSync(opts.outputDir, { recursive: true });
@@ -155,10 +138,10 @@ async function main() {
 
   while (collected < opts.maxCount) {
     const remaining = opts.maxCount - collected;
-    const fetchCount = Math.min(perPage, remaining);
 
-    console.log(`\n[페이지 ${page}] 조회 중... (수집 ${collected}/${opts.maxCount})`);
+    console.log(`\n[페이지 ${page}] 접속 + 조회 중... (수집 ${collected}/${opts.maxCount})`);
 
+    // goto + AJAX in single cheliped call to maintain session
     const listJs = `
       var x = new XMLHttpRequest();
       x.open("POST", "/othicInfo/infoList/orginlInfoList.ajax", false);
@@ -173,7 +156,25 @@ async function main() {
       });
     `.replace(/\n/g, ' ');
 
-    const listData = runJsInSession(listJs);
+    const results = cheliped([
+      { cmd: 'goto', args: [`${BASE_URL}/othicInfo/infoList/orginlInfoList.do`] },
+      { cmd: 'run-js', args: [listJs] },
+    ]);
+
+    if (!results?.[0]?.result?.success) {
+      console.error('[실패] 사이트 접속 불가');
+      break;
+    }
+    if (page === 1) console.log('[브라우저] 접속 성공');
+
+    const jsResult = results?.[1]?.result?.result;
+    let listData = null;
+    if (typeof jsResult === 'string') {
+      try { listData = JSON.parse(jsResult); } catch {}
+    } else {
+      listData = jsResult;
+    }
+
     if (!listData || listData.code !== '200') {
       console.error('[실패] 목록 조회 오류:', listData?.code);
       break;
@@ -241,12 +242,13 @@ async function main() {
         md += `\n## 파일 목록\n\n`;
         fileNm.split('|').forEach(f => { if (f.trim()) md += `- ${f.trim()}\n`; });
       }
-      md += `\n## 원문 링크\n\n${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${insttSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4\n`;
+      const nstSeCd = regNo.slice(0, 3) || insttSeCd;
+      md += `\n## 원문 링크\n\n${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${nstSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4\n`;
 
       fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
 
       // Supabase sync
-      syncToSupabase({
+      await syncToSupabase({
         prdctn_instt_regist_no: regNo,
         info_sj: title,
         doc_no: docNo,

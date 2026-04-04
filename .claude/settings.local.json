@@ -42,7 +42,16 @@
       "Bash(node browser_collect.mjs -n 5 -o ./test_output)",
       "Bash(cat C:/project_open/collector/test_output/1_*/metadata.md)",
       "Bash(SUPABASE_URL=\"https://tnsqkpuvdiinzljnfubu.supabase.co\" SUPABASE_SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuc3FrcHV2ZGlpbnpsam5mdWJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMzU2NDMsImV4cCI6MjA5MDgxMTY0M30.qu4wpv-5h-DbFQQYR0kyLb9JTPyC5ShZLT6cOXxedeA\" node browser_collect.mjs -n 10 -o ./test_output2)",
-      "mcp__28a5e02d-0717-46ec-90b3-3ae77d44ed20__get_runtime_logs"
+      "mcp__28a5e02d-0717-46ec-90b3-3ae77d44ed20__get_runtime_logs",
+      "Bash(rm -rf test_output test_output2)",
+      "Bash(SUPABASE_URL=\"https://tnsqkpuvdiinzljnfubu.supabase.co\" SUPABASE_SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuc3FrcHV2ZGlpbnpsam5mdWJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMzU2NDMsImV4cCI6MjA5MDgxMTY0M30.qu4wpv-5h-DbFQQYR0kyLb9JTPyC5ShZLT6cOXxedeA\" node browser_collect.mjs -n 10 -o ./real_output)",
+      "Bash(taskkill /F /IM chrome.exe)",
+      "Bash(taskkill /F /IM chromium.exe)",
+      "Bash(find C:/project_open/collector/cheliped-browser -name *.session* -o -name *.json -path */session/*)",
+      "Bash(timeout 30 node cheliped-cli.mjs '[{\"\"cmd\"\":\"\"goto\"\",\"\"args\"\":[\"\"https://example.com\"\"]}]')",
+      "Bash(rm -rf /tmp/cheliped-*)",
+      "Bash(rm -rf real_output)",
+      "Bash(SUPABASE_URL=\"https://tnsqkpuvdiinzljnfubu.supabase.co\" SUPABASE_SERVICE_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuc3FrcHV2ZGlpbnpsam5mdWJ1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMzU2NDMsImV4cCI6MjA5MDgxMTY0M30.qu4wpv-5h-DbFQQYR0kyLb9JTPyC5ShZLT6cOXxedeA\" node browser_collect.mjs -n 10 -o ./real_output2)"
     ]
   }
 }
