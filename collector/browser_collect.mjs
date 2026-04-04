@@ -225,25 +225,52 @@ async function main() {
 
       fs.mkdirSync(folderPath, { recursive: true });
 
+      // Fetch detail page for full 분류체계 and 보존기간
+      const nstSeCd = regNo.slice(0, 3) || insttSeCd;
+      const detailUrl = `${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${nstSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4`;
+      const extractJs = `var ths=document.querySelectorAll("th"); var tds=document.querySelectorAll("td"); var d={}; for(var i=0;i<ths.length&&i<tds.length;i++){d[ths[i].textContent.trim()]=tds[i].textContent.trim();} JSON.stringify(d)`;
+
+      const detailResults = cheliped([
+        { cmd: 'goto', args: [detailUrl] },
+        { cmd: 'wait-for', args: ['td', '5000'] },
+        { cmd: 'run-js', args: [extractJs] },
+      ]);
+
+      let fullNstClNm = nstClNm;
+      let prsrvPdCd = '';
+      let detailDeptNm = deptNm;
+      let detailDocNo = docNo;
+
+      if (detailResults?.[2]?.result?.result) {
+        try {
+          const detail = JSON.parse(detailResults[2].result.result);
+          fullNstClNm = detail['분류체계'] || nstClNm;
+          prsrvPdCd = detail['보존기간'] || '';
+          if (detail['담당부서명'] && !deptNm) detailDeptNm = detail['담당부서명'];
+          if (detail['문서번호'] && !docNo) detailDocNo = detail['문서번호'];
+          console.log(`    → 상세: 분류=${fullNstClNm.slice(0,40)}... 보존=${prsrvPdCd}`);
+        } catch {}
+      }
+
       // metadata.md
       let md = `# ${title}\n\n## 메타데이터\n\n| 항목 | 내용 |\n|------|------|\n`;
       md += `| 제목 | ${title} |\n`;
-      md += `| 문서번호 | ${docNo} |\n`;
+      md += `| 문서번호 | ${detailDocNo} |\n`;
       md += `| 기관명 | ${insttNm} |\n`;
-      md += `| 담당부서 | ${deptNm} |\n`;
+      md += `| 담당부서 | ${detailDeptNm} |\n`;
       md += `| 담당자 | ${chargerNm} |\n`;
       md += `| 생산일자 | ${formatDate(pDate)} |\n`;
+      md += `| 보존기간 | ${prsrvPdCd} |\n`;
       md += `| 단위업무 | ${unitJob} |\n`;
       md += `| 공개여부 | ${oppLabel} |\n`;
-      md += `| 분류체계 | ${nstClNm} |\n`;
+      md += `| 분류체계 | ${fullNstClNm} |\n`;
       md += `| 원문등록번호 | ${regNo} |\n`;
       md += `| 기관코드 | ${insttCd} |\n`;
       if (fileNm) {
         md += `\n## 파일 목록\n\n`;
         fileNm.split('|').forEach(f => { if (f.trim()) md += `- ${f.trim()}\n`; });
       }
-      const nstSeCd = regNo.slice(0, 3) || insttSeCd;
-      md += `\n## 원문 링크\n\n${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${nstSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4\n`;
+      md += `\n## 원문 링크\n\n${detailUrl}\n`;
 
       fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
 
@@ -251,16 +278,17 @@ async function main() {
       await syncToSupabase({
         prdctn_instt_regist_no: regNo,
         info_sj: title,
-        doc_no: docNo,
+        doc_no: detailDocNo,
         proc_instt_nm: insttNm,
-        chrg_dept_nm: deptNm,
+        chrg_dept_nm: detailDeptNm,
         charger_nm: chargerNm,
         prdctn_dt: pDate.length >= 8 ? `${pDate.slice(0,4)}-${pDate.slice(4,6)}-${pDate.slice(6,8)}` : null,
         prdctn_dt_raw: prdnDt || null,
+        prsrv_pd_cd: prsrvPdCd || null,
         unit_job_nm: unitJob,
         opp_se_cd: oppSeCd,
         opp_se_nm: oppLabel,
-        nst_cl_nm: nstClNm,
+        nst_cl_nm: fullNstClNm,
         instt_cd: insttCd,
         instt_se_cd: insttSeCd,
         status: 'ok',
