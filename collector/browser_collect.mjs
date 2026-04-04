@@ -64,14 +64,25 @@ function formatDate(d) {
   if (!d || d.length < 8) return '-';
   return `${d.slice(0, 4)}.${d.slice(4, 6)}.${d.slice(6, 8)}`;
 }
+function canDownload(oppSeCd, fileOppYn, urtxtYn, dtaRedgLmttEndYmd) {
+  const today = fmt(new Date());
+  if (urtxtYn === 'N') return [false, '국장급 이상 전용'];
+  if (oppSeCd === '3') return [false, '비공개'];
+  if (oppSeCd === '5' && (dtaRedgLmttEndYmd || '') > today) return [false, `열람제한(${dtaRedgLmttEndYmd})`];
+  if (oppSeCd === '1') return [true, ''];
+  if (oppSeCd === '2' && fileOppYn === 'Y') return [true, ''];
+  return [false, '부분공개(비공개 파일)'];
+}
 
 const OPP_LABELS = { '1': '공개', '2': '부분공개', '3': '비공개', '5': '열람제한' };
 
-// ── Cheliped ──
+// ── Cheliped (--session for persistent Chrome) ──
+const SESSION_NAME = 'collector-' + process.pid;
+
 function cheliped(commands) {
   const cmdsJson = JSON.stringify(commands);
   try {
-    const result = execFileSync('node', [CLI_PATH, cmdsJson], {
+    const result = execFileSync('node', [CLI_PATH, '--session', SESSION_NAME, cmdsJson], {
       encoding: 'utf8',
       timeout: 180000,
       maxBuffer: 50 * 1024 * 1024,
@@ -101,21 +112,23 @@ let supabaseUrl = process.env.SUPABASE_URL;
 let supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
 async function syncToSupabase(doc) {
-  if (!supabaseUrl || !supabaseKey) return;
+  if (!supabaseUrl || !supabaseKey) return null;
   try {
-    const res = await fetch(`${supabaseUrl}/rest/v1/documents`, {
+    const res = await fetch(`${supabaseUrl}/rest/v1/documents?on_conflict=prdctn_instt_regist_no`, {
       method: 'POST',
       headers: {
         'apikey': supabaseKey,
         'Authorization': `Bearer ${supabaseKey}`,
         'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates',
+        'Prefer': 'return=representation,resolution=merge-duplicates',
       },
       body: JSON.stringify(doc),
     });
-    if (!res.ok) console.error(`  [Supabase] ${res.status}`);
+    if (!res.ok) { console.error(`  [Supabase] ${res.status}`); return null; }
+    const data = await res.json();
+    return data?.[0]?.id || null;  // return document UUID for files FK
   } catch (e) {
-    // non-fatal
+    return null;
   }
 }
 
@@ -230,29 +243,88 @@ async function main() {
       const detailUrl = `${BASE_URL}/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${regNo}&prdnDt=${prdnDt}&nstSeCd=${nstSeCd}&title=%EC%9B%90%EB%AC%B8%EC%A0%95%EB%B3%B4`;
       const extractJs = `var ths=document.querySelectorAll("th"); var tds=document.querySelectorAll("td"); var d={}; for(var i=0;i<ths.length&&i<tds.length;i++){d[ths[i].textContent.trim()]=tds[i].textContent.trim();} JSON.stringify(d)`;
 
+      // Navigate to detail + extract DOM meta + poll fileList in ONE cheliped call
+      const combinedJs = `
+var ths=document.querySelectorAll("th");var tds=document.querySelectorAll("td");
+var dom={};for(var i=0;i<ths.length&&i<tds.length;i++){dom[ths[i].textContent.trim()]=tds[i].textContent.trim();}
+var vo=null;if(typeof result!=="undefined"&&result.openCateSearchVO){vo=result.openCateSearchVO;}
+JSON.stringify({dom:dom,hasVO:!!vo,
+  vo:vo?{oppSeCd:vo.oppSeCd,urtxtYn:vo.urtxtYn,nstCd:vo.nstCd,chrgDeptNm:vo.chrgDeptNm,chrgDeptCd:vo.chrgDeptCd,docNo:vo.docNo,infoSj:vo.infoSj,chgrNmpn:vo.chgrNmpn,prcsNstNm:vo.prcsNstNm,nstClNm:vo.nstClNm,prsrvPdCd:vo.prsrvPdCd,prdnDt:vo.prdnDt,dtaRedgLmttEndYmd:vo.dtaRedgLmttEndYmd,
+    files:(vo.fileList||[]).map(function(f){return{fileId:f.fileId,fileNm:f.fileNm,fileSeDc:f.fileSeDc,fileByteNum:f.fileByteNum,fileOppYn:f.fileOppYn}})}:null});
+      `.replace(/\n/g, ' ');
+
+      // If VO not available on first try, poll with setInterval in same session
+      const pollJs = `
+var tries=0;var iv=setInterval(function(){tries++;
+  if(typeof result!=="undefined"&&result.openCateSearchVO&&result.openCateSearchVO.fileList){
+    clearInterval(iv);var vo=result.openCateSearchVO;
+    window._voResult=JSON.stringify({ok:true,oppSeCd:vo.oppSeCd,urtxtYn:vo.urtxtYn,nstCd:vo.nstCd,chrgDeptNm:vo.chrgDeptNm,chrgDeptCd:vo.chrgDeptCd,docNo:vo.docNo,infoSj:vo.infoSj,chgrNmpn:vo.chgrNmpn,prcsNstNm:vo.prcsNstNm,nstClNm:vo.nstClNm,prsrvPdCd:vo.prsrvPdCd,prdnDt:vo.prdnDt,dtaRedgLmttEndYmd:vo.dtaRedgLmttEndYmd,
+      files:(vo.fileList||[]).map(function(f){return{fileId:f.fileId,fileNm:f.fileNm,fileSeDc:f.fileSeDc,fileByteNum:f.fileByteNum,fileOppYn:f.fileOppYn}})});
+  }else if(tries>40){clearInterval(iv);window._voResult=JSON.stringify({ok:false});}
+},200);"polling"
+      `.replace(/\n/g, ' ');
+
       const detailResults = cheliped([
         { cmd: 'goto', args: [detailUrl] },
         { cmd: 'wait-for', args: ['td', '5000'] },
-        { cmd: 'run-js', args: [extractJs] },
+        { cmd: 'run-js', args: [combinedJs] },
       ]);
 
       let fullNstClNm = nstClNm;
       let prsrvPdCd = '';
       let detailDeptNm = deptNm;
       let detailDocNo = docNo;
+      let fileList = [];
+      let voData = null;
 
       if (detailResults?.[2]?.result?.result) {
         try {
-          const detail = JSON.parse(detailResults[2].result.result);
-          fullNstClNm = detail['분류체계'] || nstClNm;
-          prsrvPdCd = detail['보존기간'] || '';
-          if (detail['담당부서명'] && !deptNm) detailDeptNm = detail['담당부서명'];
-          if (detail['문서번호'] && !docNo) detailDocNo = detail['문서번호'];
+          const combined = JSON.parse(detailResults[2].result.result);
+          // DOM metadata
+          const dom = combined.dom || {};
+          fullNstClNm = dom['분류체계'] || nstClNm;
+          prsrvPdCd = dom['보존기간'] || '';
+          if (dom['담당부서명'] && !deptNm) detailDeptNm = dom['담당부서명'];
+          if (dom['문서번호'] && !docNo) detailDocNo = dom['문서번호'];
           console.log(`    → 상세: 분류=${fullNstClNm.slice(0,40)}... 보존=${prsrvPdCd}`);
+
+          // VO data (may or may not be available yet)
+          if (combined.hasVO && combined.vo) {
+            voData = combined.vo;
+            fileList = voData.files || [];
+            if (voData.docNo) detailDocNo = voData.docNo;
+            if (voData.chrgDeptNm) detailDeptNm = voData.chrgDeptNm;
+          }
         } catch {}
       }
 
-      // metadata.md
+      // If VO not available, poll in same session (goto already done, page is loaded)
+      if (!voData) {
+        cheliped([{ cmd: 'run-js', args: [pollJs] }]);
+        // Wait for polling to complete
+        for (let attempt = 0; attempt < 10; attempt++) {
+          await new Promise(r => setTimeout(r, 1500));
+          const pollResult = cheliped([{ cmd: 'run-js', args: ['window._voResult || "waiting"'] }]);
+          const pVal = pollResult?.[0]?.result?.result;
+          if (typeof pVal === 'string' && pVal !== 'waiting') {
+            try {
+              voData = JSON.parse(pVal);
+              if (voData.ok) {
+                fileList = voData.files || [];
+                if (voData.docNo) detailDocNo = voData.docNo;
+                if (voData.chrgDeptNm) detailDeptNm = voData.chrgDeptNm;
+              }
+            } catch {}
+            break;
+          }
+        }
+      }
+
+      if (fileList.length > 0) {
+        console.log(`    → 파일: ${fileList.length}개 (${fileList.map(f => f.fileSeDc + ':' + (f.fileNm || '').slice(0,20)).join(', ')})`);
+      }
+
+      // Step C: Write metadata.md with full file info
       let md = `# ${title}\n\n## 메타데이터\n\n| 항목 | 내용 |\n|------|------|\n`;
       md += `| 제목 | ${title} |\n`;
       md += `| 문서번호 | ${detailDocNo} |\n`;
@@ -266,16 +338,86 @@ async function main() {
       md += `| 분류체계 | ${fullNstClNm} |\n`;
       md += `| 원문등록번호 | ${regNo} |\n`;
       md += `| 기관코드 | ${insttCd} |\n`;
-      if (fileNm) {
-        md += `\n## 파일 목록\n\n`;
+
+      md += `\n## 파일 목록\n\n`;
+      if (fileList.length > 0) {
+        for (const f of fileList) {
+          const [dlOk] = canDownload(voData?.oppSeCd || oppSeCd, f.fileOppYn, voData?.urtxtYn || 'Y', voData?.dtaRedgLmttEndYmd || '');
+          md += `- **${f.fileSeDc || '기타'}**: ${f.fileNm} (${formatBytes(Number(f.fileByteNum))}) [${dlOk ? '공개' : '비공개'}]\n`;
+        }
+      } else if (fileNm) {
         fileNm.split('|').forEach(f => { if (f.trim()) md += `- ${f.trim()}\n`; });
       }
       md += `\n## 원문 링크\n\n${detailUrl}\n`;
-
       fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
 
-      // Supabase sync
-      await syncToSupabase({
+      // Step D: Download files via 3-step fetch API (all in one cheliped run-js on detail page)
+      let downloadCount = 0;
+      if (!opts.skipFiles && fileList.length > 0 && voData) {
+        for (const f of fileList) {
+          const [dlOk, dlReason] = canDownload(voData.oppSeCd, f.fileOppYn, voData.urtxtYn, voData.dtaRedgLmttEndYmd);
+          if (!dlOk) {
+            console.log(`    → 파일 건너뜀: ${f.fileNm} (${dlReason})`);
+            continue;
+          }
+
+          const isPdf = (f.fileNm || '').toLowerCase().endsWith('.pdf') ? 'Y' : 'N';
+          const esc = s => encodeURIComponent((s || '').replace(/\\/g, '').replace(/"/g, ''));
+
+          // All 3 steps via sync XHR. Step 3 uses overrideMimeType for binary.
+          const dlAllJs = `
+try{
+  var x1=new XMLHttpRequest();x1.open("POST","/util/wonmunUtils/wonmunFileRequest.ajax",false);
+  x1.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+  x1.send("fileId=${esc(f.fileId)}&esbFileName=${esc(f.fileNm)}&docId=${esc(voData.docNo)}&ctDate=${voData.prdnDt||prdnDt}&orgCd=${voData.nstCd}&prdnNstRgstNo=${regNo}&oppSeCd=${voData.oppSeCd}&isPdf=${isPdf}&chrgDeptNm=${esc(voData.chrgDeptNm)}");
+  var s1=JSON.parse(x1.responseText);
+  if(!s1.esbFilePath){JSON.stringify({ok:false,step:1});}
+  else{
+    var x2=new XMLHttpRequest();x2.open("POST","/util/wonmunUtils/wonmunFileFilter.ajax",false);
+    x2.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+    x2.send("prdnNstRgstNo=${regNo}&prdnDt=${voData.prdnDt||prdnDt}&esbFilePath="+encodeURIComponent(s1.esbFilePath)+"&esbFileName="+encodeURIComponent(s1.esbFileName)+"&fileName="+encodeURIComponent(s1.fileName)+"&fileId=${esc(f.fileId)}&orglPrdnNstCd="+(s1.orglPrdnNstCd||"")+"&nstCd=${voData.nstCd}&orgCd=${voData.nstCd}&orgSeCd=${nstSeCd}&infoSj=${esc(voData.infoSj)}&chgrNmpn=${esc(voData.chgrNmpn)}&orgNm=${esc(voData.prcsNstNm)}&chrgDeptCd=${voData.chrgDeptCd||""}&chrgDeptNm=${esc(voData.chrgDeptNm)}&nstClNm=${esc(voData.nstClNm)}&prsrvPdCd=${voData.prsrvPdCd||""}&docId=${esc(voData.docNo)}&isPdf=${isPdf}&step=step2&closegvrnYn="+(s1.orginlFileVO&&s1.orginlFileVO.closegvrnYn||"N")+"&ndnfFiltrRndabtYn=N&mngrTelno="+(s1.mngrTelno||""));
+    var s2=JSON.parse(x2.responseText);
+    if(!s2.esbFilePath){JSON.stringify({ok:false,step:2});}
+    else{
+      var x3=new XMLHttpRequest();x3.open("POST","/util/wonmunUtils/wonmunFileDownload.down",false);
+      x3.overrideMimeType("text/plain; charset=x-user-defined");
+      x3.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+      x3.send("esbFilePath="+encodeURIComponent(s2.esbFilePath)+"&esbFileName="+encodeURIComponent(s2.esbFileName)+"&fileName="+encodeURIComponent(s2.fileName)+"&isPdf="+(s2.isPdf||"${isPdf}")+"&prdnNstRgstNo=${regNo}&prdnDt=${voData.prdnDt||prdnDt}&fileId=${esc(f.fileId)}&gubun="+encodeURIComponent(s2.esbFilePath));
+      if(x3.status===200&&x3.responseText.length>0){
+        var raw=x3.responseText;var bytes=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++){bytes[i]=raw.charCodeAt(i)&0xff;}
+        var bin="";var chk=8192;for(var j=0;j<bytes.length;j+=chk){bin+=String.fromCharCode.apply(null,bytes.subarray(j,Math.min(j+chk,bytes.length)));}
+        JSON.stringify({ok:true,size:bytes.length,data:btoa(bin)});
+      }else{JSON.stringify({ok:false,step:3,status:x3.status});}
+    }
+  }
+}catch(e){JSON.stringify({ok:false,error:e.message});}
+          `.replace(/\n/g, ' ');
+
+          // goto detail page first (re-establish session context), then run download JS
+          const dlResult = cheliped([
+            { cmd: 'goto', args: [detailUrl] },
+            { cmd: 'wait-for', args: ['td', '3000'] },
+            { cmd: 'run-js', args: [dlAllJs] },
+          ]);
+          // dlResult index 2 has the run-js result
+          const dlResultEntry = dlResult?.[2] || dlResult?.[0];
+          let dlData = null;
+          const dlVal = dlResultEntry?.result?.result;
+          if (typeof dlVal === 'string') { try { dlData = JSON.parse(dlVal); } catch {} }
+
+          if (dlData?.ok && dlData.data) {
+            const fname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm || 'file'}`, 200);
+            fs.writeFileSync(path.join(folderPath, fname), Buffer.from(dlData.data, 'base64'));
+            downloadCount++;
+            console.log(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)})`);
+          } else {
+            console.log(`    → 다운로드 실패: ${f.fileNm} (step ${dlData?.step || '?'}, ${dlData?.error || ''})`);
+          }
+        }
+      }
+
+      // Step E: Supabase sync - document
+      const docId = await syncToSupabase({
         prdctn_instt_regist_no: regNo,
         info_sj: title,
         doc_no: detailDocNo,
@@ -294,9 +436,36 @@ async function main() {
         status: 'ok',
       });
 
+      // Step F: Supabase sync - files
+      if (fileList.length > 0 && supabaseUrl && supabaseKey) {
+        for (const f of fileList) {
+          const [dlOk] = canDownload(voData?.oppSeCd || oppSeCd, f.fileOppYn, voData?.urtxtYn || 'Y', '');
+          try {
+            await fetch(`${supabaseUrl}/rest/v1/files`, {
+              method: 'POST',
+              headers: {
+                'apikey': supabaseKey,
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'resolution=merge-duplicates',
+              },
+              body: JSON.stringify({
+                document_id: docId || null,
+                file_id: f.fileId,
+                file_nm: f.fileNm,
+                file_se_dc: f.fileSeDc,
+                file_byte_num: Number(f.fileByteNum) || null,
+                file_opp_yn: f.fileOppYn,
+                downloaded: dlOk && downloadCount > 0,
+              }),
+            });
+          } catch {}
+        }
+      }
+
       // CSV log
       fs.appendFileSync(csvPath,
-        `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},ok,${oppLabel},${insttNm},\n`, 'utf8');
+        `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},ok,${downloadCount},${oppLabel},${insttNm}\n`, 'utf8');
     }
 
     if (items.length < perPage) break;
