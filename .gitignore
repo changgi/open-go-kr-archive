@@ -42,3 +42,5 @@ collector/real_output/
 collector/real_output2/
 collector/final_output/
 collector/file_test/
+collector/meta_test/
+collector/meta_test2/

@@ -79,37 +79,78 @@ export default async function DocumentDetailPage({ params }: Props) {
       {/* Files */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         <h2 className="px-4 py-3 bg-gray-50 font-semibold text-sm text-gray-700 border-b">
-          파일 목록
+          파일 목록 ({document.files.length}개)
         </h2>
         {document.files.length === 0 ? (
           <p className="px-4 py-6 text-sm text-gray-500 text-center">
             첨부 파일이 없습니다.
           </p>
         ) : (
-          <ul className="divide-y">
-            {document.files.map((f) => (
-              <li key={f.id} className="px-4 py-3 flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-medium text-primary-600 mr-2">
-                    {f.file_se_dc || "기타"}
-                  </span>
-                  <span className="text-sm text-gray-900">{f.file_nm}</span>
-                  <span className="text-xs text-gray-400 ml-2">
-                    ({formatFileSize(f.file_byte_num)})
-                  </span>
+          <div className="divide-y">
+            {document.files.map((f: any) => (
+              <div key={f.id} className="px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-primary-600 px-1.5 py-0.5 bg-primary-50 rounded">
+                      {f.file_se_dc || "기타"}
+                    </span>
+                    {f.file_ext && (
+                      <span className="text-xs font-mono text-gray-500 px-1.5 py-0.5 bg-gray-100 rounded">
+                        {f.file_ext}
+                      </span>
+                    )}
+                    <span className="text-sm text-gray-900">{f.file_nm}</span>
+                    <span className="text-xs text-gray-400">
+                      ({formatFileSize(f.file_byte_num)})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {f.downloaded && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                        다운로드됨
+                      </span>
+                    )}
+                    {f.is_archive && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">
+                        압축파일
+                      </span>
+                    )}
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        f.file_opp_yn === "Y"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {f.file_opp_yn === "Y" ? "공개" : "비공개"}
+                    </span>
+                  </div>
                 </div>
-                <span
-                  className={`text-xs px-2 py-0.5 rounded ${
-                    f.file_opp_yn === "Y"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-red-100 text-red-700"
-                  }`}
-                >
-                  {f.file_opp_yn === "Y" ? "공개" : "비공개"}
-                </span>
-              </li>
+                {/* ZIP archive entries */}
+                {f.archive_entries && (() => {
+                  let entries: any[] = [];
+                  try { entries = typeof f.archive_entries === 'string' ? JSON.parse(f.archive_entries) : f.archive_entries; } catch {}
+                  const fileEntries = entries.filter((e: any) => !e.path?.endsWith('/'));
+                  if (fileEntries.length === 0) return null;
+                  return (
+                    <div className="mt-2 ml-4 p-2 bg-gray-50 rounded text-xs">
+                      <p className="font-medium text-gray-600 mb-1">ZIP 내부 ({fileEntries.length}개 파일)</p>
+                      <ul className="space-y-0.5 text-gray-500">
+                        {fileEntries.slice(0, 10).map((e: any, i: number) => (
+                          <li key={i} className="font-mono">
+                            {e.path} <span className="text-gray-400">({formatFileSize(e.size)})</span>
+                          </li>
+                        ))}
+                        {fileEntries.length > 10 && (
+                          <li className="text-gray-400">... 외 {fileEntries.length - 10}개</li>
+                        )}
+                      </ul>
+                    </div>
+                  );
+                })()}
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
 

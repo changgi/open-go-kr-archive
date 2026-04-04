@@ -75,6 +75,119 @@ function canDownload(oppSeCd, fileOppYn, urtxtYn, dtaRedgLmttEndYmd) {
 }
 
 const OPP_LABELS = { '1': '공개', '2': '부분공개', '3': '비공개', '5': '열람제한' };
+const ARCHIVE_EXTS = ['.zip', '.7z', '.rar', '.tar', '.gz', '.tgz'];
+
+function getFileExt(name) {
+  if (!name) return '';
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot).toLowerCase() : '';
+}
+
+function isArchiveFile(name) {
+  return ARCHIVE_EXTS.some(ext => (name || '').toLowerCase().endsWith(ext));
+}
+
+// Parse ZIP central directory from Buffer to extract file entries
+function parseZipEntries(buf) {
+  const entries = [];
+  try {
+    // Find End of Central Directory (EOCD) signature: 0x06054b50
+    let eocdOff = -1;
+    for (let i = buf.length - 22; i >= 0 && i >= buf.length - 65557; i--) {
+      if (buf[i] === 0x50 && buf[i+1] === 0x4b && buf[i+2] === 0x05 && buf[i+3] === 0x06) {
+        eocdOff = i; break;
+      }
+    }
+    if (eocdOff < 0) return entries;
+
+    const cdOffset = buf.readUInt32LE(eocdOff + 16);
+    const cdEntries = buf.readUInt16LE(eocdOff + 10);
+    let pos = cdOffset;
+
+    for (let e = 0; e < cdEntries && pos < buf.length - 46; e++) {
+      // Central Directory signature: 0x02014b50
+      if (buf[pos] !== 0x50 || buf[pos+1] !== 0x4b || buf[pos+2] !== 0x01 || buf[pos+3] !== 0x02) break;
+      const compSize = buf.readUInt32LE(pos + 20);
+      const uncompSize = buf.readUInt32LE(pos + 24);
+      const nameLen = buf.readUInt16LE(pos + 28);
+      const extraLen = buf.readUInt16LE(pos + 30);
+      const commentLen = buf.readUInt16LE(pos + 32);
+      // DOS date/time
+      const dosTime = buf.readUInt16LE(pos + 12);
+      const dosDate = buf.readUInt16LE(pos + 14);
+      const year = ((dosDate >> 9) & 0x7f) + 1980;
+      const month = ((dosDate >> 5) & 0x0f);
+      const day = dosDate & 0x1f;
+      const modified = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+
+      const fileName = buf.slice(pos + 46, pos + 46 + nameLen).toString('utf8');
+      entries.push({ path: fileName, size: uncompSize, compressed: compSize, modified });
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+  } catch {}
+  return entries;
+}
+
+// Generate tree structure from zip entries
+function buildFileTree(entries, zipName) {
+  const dirs = new Map(); // path -> { files: [], subdirs: Set }
+  dirs.set('', { files: [], subdirs: new Set() });
+
+  for (const e of entries) {
+    if (e.path.endsWith('/')) {
+      // Directory entry
+      dirs.set(e.path, dirs.get(e.path) || { files: [], subdirs: new Set() });
+      const parent = e.path.slice(0, e.path.slice(0, -1).lastIndexOf('/') + 1);
+      if (!dirs.has(parent)) dirs.set(parent, { files: [], subdirs: new Set() });
+      dirs.get(parent).subdirs.add(e.path);
+    } else {
+      const lastSlash = e.path.lastIndexOf('/');
+      const parent = lastSlash >= 0 ? e.path.slice(0, lastSlash + 1) : '';
+      if (!dirs.has(parent)) dirs.set(parent, { files: [], subdirs: new Set() });
+      dirs.get(parent).files.push(e);
+    }
+  }
+
+  function renderTree(dirPath, prefix) {
+    const dir = dirs.get(dirPath);
+    if (!dir) return '';
+    let out = '';
+    const items = [
+      ...Array.from(dir.subdirs).sort().map(d => ({ type: 'dir', path: d })),
+      ...dir.files.sort((a, b) => a.path.localeCompare(b.path)).map(f => ({ type: 'file', ...f })),
+    ];
+    items.forEach((item, i) => {
+      const isLast = i === items.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const childPrefix = isLast ? '    ' : '│   ';
+      if (item.type === 'dir') {
+        const name = item.path.slice(dirPath.length).replace(/\/$/, '') + '/';
+        out += `${prefix}${connector}${name}\n`;
+        out += renderTree(item.path, prefix + childPrefix);
+      } else {
+        const name = item.path.slice(dirPath.length);
+        out += `${prefix}${connector}${name} (${formatBytes(item.size)})\n`;
+      }
+    });
+    return out;
+  }
+
+  let tree = `${zipName}\n`;
+  tree += renderTree('', '');
+  return tree;
+}
+
+function generateZipStructureMd(zipName, entries) {
+  const fileEntries = entries.filter(e => !e.path.endsWith('/'));
+  let md = `# ${zipName} 내부 구조\n\n`;
+  md += `## 파일 트리\n\n\`\`\`\n${buildFileTree(entries, zipName)}\`\`\`\n\n`;
+  md += `## 파일 목록 (${fileEntries.length}개)\n\n`;
+  md += `| # | 경로 | 크기 | 수정일 |\n|---|------|------|--------|\n`;
+  fileEntries.forEach((e, i) => {
+    md += `| ${i + 1} | ${e.path} | ${formatBytes(e.size)} | ${e.modified} |\n`;
+  });
+  return md;
+}
 
 // ── Cheliped (--session for persistent Chrome) ──
 const SESSION_NAME = 'collector-' + process.pid;
@@ -339,17 +452,27 @@ var tries=0;var iv=setInterval(function(){tries++;
       md += `| 원문등록번호 | ${regNo} |\n`;
       md += `| 기관코드 | ${insttCd} |\n`;
 
-      md += `\n## 파일 목록\n\n`;
+      md += `\n## 파일 목록 (${fileList.length}개)\n\n`;
       if (fileList.length > 0) {
-        for (const f of fileList) {
+        fileList.forEach((f, idx) => {
+          const ext = getFileExt(f.fileNm);
           const [dlOk] = canDownload(voData?.oppSeCd || oppSeCd, f.fileOppYn, voData?.urtxtYn || 'Y', voData?.dtaRedgLmttEndYmd || '');
-          md += `- **${f.fileSeDc || '기타'}**: ${f.fileNm} (${formatBytes(Number(f.fileByteNum))}) [${dlOk ? '공개' : '비공개'}]\n`;
-        }
+          md += `### ${idx + 1}. ${f.fileSeDc || '기타'}: ${f.fileNm}\n\n`;
+          md += `| 속성 | 값 |\n|------|------|\n`;
+          md += `| 파일ID | ${f.fileId} |\n`;
+          md += `| 파일명 | ${f.fileNm} |\n`;
+          md += `| 구분 | ${f.fileSeDc || '-'} |\n`;
+          md += `| 크기 | ${formatBytes(Number(f.fileByteNum))} (${Number(f.fileByteNum).toLocaleString()} bytes) |\n`;
+          md += `| 확장자 | ${ext || '-'} |\n`;
+          md += `| 공개여부 | ${dlOk ? '공개' : '비공개'} (fileOppYn=${f.fileOppYn}) |\n`;
+          md += `| 압축파일 | ${isArchiveFile(f.fileNm) ? '예' : '아니오'} |\n\n`;
+        });
       } else if (fileNm) {
         fileNm.split('|').forEach(f => { if (f.trim()) md += `- ${f.trim()}\n`; });
       }
       md += `\n## 원문 링크\n\n${detailUrl}\n`;
-      fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
+      // metadata.md is written after downloads to include download status
+      // (see below after Step D)
 
       // Step D: Download files via 3-step fetch API (all in one cheliped run-js on detail page)
       let downloadCount = 0;
@@ -407,14 +530,63 @@ try{
 
           if (dlData?.ok && dlData.data) {
             const fname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm || 'file'}`, 200);
-            fs.writeFileSync(path.join(folderPath, fname), Buffer.from(dlData.data, 'base64'));
+            const fileBuf = Buffer.from(dlData.data, 'base64');
+            fs.writeFileSync(path.join(folderPath, fname), fileBuf);
             downloadCount++;
+            f._downloaded = true;
             console.log(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)})`);
+
+            // ZIP 파일 구조 분석
+            if (isArchiveFile(f.fileNm) && f.fileNm.toLowerCase().endsWith('.zip')) {
+              try {
+                const zipEntries = parseZipEntries(fileBuf);
+                if (zipEntries.length > 0) {
+                  f._archiveEntries = zipEntries;
+                  const structMd = generateZipStructureMd(f.fileNm, zipEntries);
+                  const structFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_구조`, 200) + '.md';
+                  fs.writeFileSync(path.join(folderPath, structFname), structMd, 'utf8');
+                  console.log(`    → ZIP 구조: ${zipEntries.filter(e => !e.path.endsWith('/')).length}개 파일 분석`);
+                }
+              } catch (ze) {
+                console.log(`    → ZIP 분석 실패: ${ze.message}`);
+              }
+            }
           } else {
+            f._downloaded = false;
             console.log(`    → 다운로드 실패: ${f.fileNm} (step ${dlData?.step || '?'}, ${dlData?.error || ''})`);
           }
         }
       }
+
+      // Update metadata.md with download status
+      if (fileList.length > 0) {
+        // Rebuild file section with download results
+        let fileMd = `\n## 파일 목록 (${fileList.length}개)\n\n`;
+        fileList.forEach((f, idx) => {
+          const ext = getFileExt(f.fileNm);
+          const [dlOk] = canDownload(voData?.oppSeCd || oppSeCd, f.fileOppYn, voData?.urtxtYn || 'Y', voData?.dtaRedgLmttEndYmd || '');
+          fileMd += `### ${idx + 1}. ${f.fileSeDc || '기타'}: ${f.fileNm}\n\n`;
+          fileMd += `| 속성 | 값 |\n|------|------|\n`;
+          fileMd += `| 파일ID | ${f.fileId} |\n`;
+          fileMd += `| 파일명 | ${f.fileNm} |\n`;
+          fileMd += `| 구분 | ${f.fileSeDc || '-'} |\n`;
+          fileMd += `| 크기 | ${formatBytes(Number(f.fileByteNum))} (${Number(f.fileByteNum).toLocaleString()} bytes) |\n`;
+          fileMd += `| 확장자 | ${ext || '-'} |\n`;
+          fileMd += `| 공개여부 | ${dlOk ? '공개' : '비공개'} (fileOppYn=${f.fileOppYn}) |\n`;
+          fileMd += `| 압축파일 | ${isArchiveFile(f.fileNm) ? '예' : '아니오'} |\n`;
+          fileMd += `| 다운로드 | ${f._downloaded ? '완료' : (dlOk ? '실패' : '건너뜀')} |\n`;
+          if (f._archiveEntries) {
+            const fileCount = f._archiveEntries.filter(e => !e.path.endsWith('/')).length;
+            fileMd += `| ZIP 내부 파일 수 | ${fileCount}개 |\n`;
+          }
+          fileMd += `\n`;
+        });
+        // Rewrite metadata.md with updated file section
+        const mdParts = md.split('\n## 파일 목록');
+        const mdAfterFiles = md.split('\n## 원문 링크');
+        md = mdParts[0] + fileMd + `\n## 원문 링크\n\n${detailUrl}\n`;
+      }
+      fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
 
       // Step E: Supabase sync - document
       const docId = await syncToSupabase({
@@ -456,7 +628,10 @@ try{
                 file_se_dc: f.fileSeDc,
                 file_byte_num: Number(f.fileByteNum) || null,
                 file_opp_yn: f.fileOppYn,
-                downloaded: dlOk && downloadCount > 0,
+                downloaded: !!f._downloaded,
+                file_ext: getFileExt(f.fileNm) || null,
+                is_archive: isArchiveFile(f.fileNm),
+                archive_entries: f._archiveEntries ? JSON.stringify(f._archiveEntries) : null,
               }),
             });
           } catch {}
