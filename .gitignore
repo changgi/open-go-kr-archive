@@ -47,3 +47,6 @@ collector/meta_test2/
 collector/quick_test/
 collector/quick_test2/
 collector/full_collect/
+collector/content_test/
+collector/content_test2/
+collector/content_final/

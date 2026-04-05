@@ -170,6 +170,29 @@ export default async function DocumentDetailPage({ params }: Props) {
                       </div>
                     </div>
                   )}
+
+                  {/* File content summary */}
+                  {f.summary && (
+                    <div className="mt-2 ml-2 p-3 bg-amber-50 rounded text-xs border border-amber-100">
+                      <p className="font-semibold text-amber-700 mb-1">내용 요약</p>
+                      <p className="text-gray-700 leading-relaxed">{f.summary}</p>
+                    </div>
+                  )}
+
+                  {/* File full content (collapsible) */}
+                  {f.content && (
+                    <details className="mt-2 ml-2">
+                      <summary className="text-xs text-primary-600 cursor-pointer hover:underline">
+                        전체 내용 보기 ({f.content_length?.toLocaleString() || f.content.length.toLocaleString()}자)
+                      </summary>
+                      <div className="mt-1 p-3 bg-gray-50 rounded text-xs border max-h-96 overflow-y-auto">
+                        <pre className="whitespace-pre-wrap text-gray-700 font-sans leading-relaxed">
+                          {f.content.slice(0, 10000)}
+                          {f.content.length > 10000 && `\n\n... (${f.content.length.toLocaleString()}자 중 10,000자 표시)`}
+                        </pre>
+                      </div>
+                    </details>
+                  )}
                 </div>
               );
             })}

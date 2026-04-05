@@ -14,9 +14,12 @@
  */
 
 import { execFileSync } from 'child_process';
+import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+const require = createRequire(import.meta.url);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.join(__dirname, 'cheliped-browser', 'scripts', 'cheliped-cli.mjs');
@@ -277,6 +280,79 @@ function parseMp4Basic(buf) {
     pos += size;
   }
   return props;
+}
+
+// ── Text extraction from files ──
+async function extractTextContent(buf, fileName) {
+  const ext = getFileExt(fileName).toLowerCase();
+  try {
+    // PDF text extraction (pdf-parse v1)
+    if (ext === '.pdf') {
+      const pdfParse = require('pdf-parse');
+      const data = await pdfParse(buf, { max: 100 });
+      return data.text || '';
+    }
+    // XLSX: extract from shared strings in ZIP
+    if (ext === '.xlsx' && buf[0] === 0x50 && buf[1] === 0x4B) {
+      return extractXlsxText(buf);
+    }
+    // DOCX: extract from document.xml in ZIP
+    if (ext === '.docx' && buf[0] === 0x50 && buf[1] === 0x4B) {
+      return extractDocxText(buf);
+    }
+    // Plain text files
+    if (['.txt', '.csv', '.tsv', '.log', '.md', '.json', '.xml', '.html', '.htm'].includes(ext)) {
+      return buf.toString('utf8').slice(0, 500000);
+    }
+  } catch (e) {
+    console.log(`    → 텍스트 추출 실패: ${e.message?.slice(0, 80)}`);
+  }
+  return '';
+}
+
+// Extract text from XLSX (Office Open XML) shared strings
+function extractXlsxText(buf) {
+  const entries = parseZipEntries(buf);
+  // Find sharedStrings.xml
+  const ssEntry = entries.find(e => e.path.includes('sharedStrings.xml'));
+  if (!ssEntry) return '';
+  // Extract from ZIP using Central Directory info
+  // Simple approach: search for <t> tags in the buffer
+  const text = buf.toString('utf8', 0, Math.min(buf.length, 2000000));
+  const matches = text.match(/<t[^>]*>([^<]+)<\/t>/g) || [];
+  return matches.map(m => m.replace(/<[^>]+>/g, '')).join(' ').slice(0, 200000);
+}
+
+// Extract text from DOCX (Office Open XML)
+function extractDocxText(buf) {
+  const text = buf.toString('utf8', 0, Math.min(buf.length, 2000000));
+  // Find <w:t> tags in document.xml
+  const matches = text.match(/<w:t[^>]*>([^<]+)<\/w:t>/g) || [];
+  return matches.map(m => m.replace(/<[^>]+>/g, '')).join('').slice(0, 200000);
+}
+
+// Generate summary from extracted text
+function generateSummary(text, title) {
+  if (!text || text.trim().length < 10) return '';
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  // Take first 3 meaningful sentences or 500 chars
+  const sentences = cleaned.split(/[.。!?]\s+/).filter(s => s.length > 10);
+  const summary = sentences.slice(0, 5).join('. ').slice(0, 500);
+  return summary || cleaned.slice(0, 300);
+}
+
+// Generate content markdown file
+function generateContentMd(fileName, text, summary) {
+  let md = `# ${fileName} 내용\n\n`;
+  if (summary) {
+    md += `## 요약\n\n${summary}\n\n`;
+  }
+  md += `## 전체 내용\n\n`;
+  md += '```\n' + text.slice(0, 100000) + '\n```\n';
+  if (text.length > 100000) {
+    md += `\n> (총 ${text.length.toLocaleString()}자 중 100,000자까지 표시)\n`;
+  }
+  return md;
 }
 
 // Upload file to Supabase Storage and return public URL
@@ -766,6 +842,18 @@ try{
               console.log(`    → 속성: ${Object.keys(f._properties).filter(k => k !== 'size_bytes' && k !== 'mime_type').join(', ')}`);
             }
 
+            // 텍스트 내용 추출
+            const textContent = await extractTextContent(fileBuf, f.fileNm);
+            if (textContent && textContent.trim().length > 0) {
+              f._content = textContent.trim();
+              f._summary = generateSummary(f._content, f.fileNm);
+              // MD 파일로 저장
+              const contentMd = generateContentMd(f.fileNm, f._content, f._summary);
+              const contentFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_내용`, 200) + '.md';
+              fs.writeFileSync(path.join(folderPath, contentFname), contentMd, 'utf8');
+              console.log(`    → 내용: ${f._content.length.toLocaleString()}자 추출, 요약: ${f._summary.slice(0, 50)}...`);
+            }
+
             // Supabase Storage 업로드
             const storagePath = `${regNo}/${fname}`;
             f._downloadUrl = await uploadToStorage(fileBuf, storagePath);
@@ -843,9 +931,24 @@ try{
           }
           fileMd += `\n`;
         });
+        // 파일 내용 요약 섹션
+        const contentFiles = fileList.filter(f => f._summary);
+        if (contentFiles.length > 0) {
+          fileMd += `\n## 파일 내용 요약\n\n`;
+          contentFiles.forEach((f, idx) => {
+            fileMd += `### ${f.fileSeDc}: ${f.fileNm}\n\n`;
+            fileMd += `> ${f._summary}\n\n`;
+            if (f._content) {
+              fileMd += `<details><summary>전체 내용 (${f._content.length.toLocaleString()}자)</summary>\n\n`;
+              fileMd += '```\n' + f._content.slice(0, 5000) + '\n```\n';
+              if (f._content.length > 5000) fileMd += `\n... (${f._content.length.toLocaleString()}자 중 5,000자 표시)\n`;
+              fileMd += `\n</details>\n\n`;
+            }
+          });
+        }
+
         // Rewrite metadata.md with updated file section
         const mdParts = md.split('\n## 파일 목록');
-        const mdAfterFiles = md.split('\n## 원문 링크');
         md = mdParts[0] + fileMd + `\n## 원문 링크\n\n${detailUrl}\n`;
       }
       fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
@@ -896,6 +999,9 @@ try{
                 archive_entries: f._archiveEntries ? JSON.stringify(f._archiveEntries) : null,
                 file_properties: f._properties ? JSON.stringify(f._properties) : null,
                 download_url: f._downloadUrl || null,
+                content: f._content ? f._content.slice(0, 100000) : null,
+                summary: f._summary || null,
+                content_length: f._content ? f._content.length : null,
               }),
             });
           } catch {}
