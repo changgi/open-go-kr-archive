@@ -344,72 +344,145 @@ function extractDocxText(buf) {
 
 // Generate summary from extracted text
 // 6하 원칙 기반 요약 (누가, 누구에게, 언제, 어디서, 무엇을, 왜)
+// 공문서 구조화 분석 + 6하 원칙 요약
 function generateSummary(text, title, metadata) {
   if (!text || text.trim().length < 10) return '';
+  // 줄 단위로 분석 (원본 줄바꿈 보존)
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const cleaned = text.replace(/\s+/g, ' ').trim();
 
-  // 메타데이터에서 기본 정보 추출
-  const who = metadata?.proc_instt_nm || '';       // 발신 기관
-  const dept = metadata?.chrg_dept_nm || '';        // 담당부서
-  const person = metadata?.charger_nm || '';        // 담당자
-  const date = metadata?.prdctn_dt || '';           // 생산일자
-  const docTitle = title || metadata?.info_sj || '';
+  const info = {
+    기관명: metadata?.proc_instt_nm || '',
+    담당부서: metadata?.chrg_dept_nm || '',
+    담당자: metadata?.charger_nm || '',
+    생산일자: metadata?.prdctn_dt || '',
+  };
 
-  // 본문에서 수신처 추출
-  const toMatch = cleaned.match(/수신\s*[:：]?\s*([^\n(]+)/);
-  const toOrg = toMatch ? toMatch[1].trim() : '';
+  // ── 1. 발신 기관 (상단 기관명) ──
+  const orgLine = lines.find(l => /청$|관$|원$|부$|실$|센터$|재단$|위원회$/.test(l) && l.length < 30);
+  if (orgLine && !info.기관명) info.기관명 = orgLine;
 
-  // 본문에서 제목 추출
-  const subjectMatch = cleaned.match(/제목\s*[:：]?\s*([^\n]+)/);
-  const subject = subjectMatch ? subjectMatch[1].trim() : docTitle;
-
-  // 본문에서 관련 근거/이유 추출
-  const reasonMatch = cleaned.match(/(?:관련\s*[:：]?\s*([^\n]+))/);
-  const reason = reasonMatch ? reasonMatch[1].trim() : '';
-
-  // 본문에서 핵심 내용 추출 (제목 다음 문장들)
-  const contentStart = cleaned.indexOf('제목');
-  let mainContent = '';
-  if (contentStart >= 0) {
-    const afterTitle = cleaned.slice(contentStart);
-    const lines = afterTitle.split(/\d+\.\s+/).filter(s => s.length > 15);
-    mainContent = lines.slice(1, 6).join(' ');
-  }
-  if (!mainContent) {
-    mainContent = cleaned.slice(0, 500);
+  // ── 2. 수신처 + 문서 유형 판별 ──
+  const rcvLine = lines.find(l => /^수신/.test(l));
+  let 수신처 = '';
+  let 문서유형 = '';
+  if (rcvLine) {
+    수신처 = rcvLine.replace(/^수신\s*[:：]?\s*/, '').replace(/\(.*\)/, '').trim();
+    if (수신처 === '내부결재' || 수신처 === '') {
+      문서유형 = '내부결재';
+    } else {
+      문서유형 = '외부발송';
+    }
   }
 
-  // 6하 원칙 요약 구성
-  let summary = '';
+  // ── 3. 제목 ──
+  const titleLine = lines.find(l => /^제목/.test(l));
+  const 제목 = titleLine ? titleLine.replace(/^제목\s*[:：]?\s*/, '').trim() : title;
 
-  // [누가] → [누구에게]
-  const sender = [who, dept, person].filter(Boolean).join(' ');
-  if (sender && toOrg) {
-    summary += `[발신] ${sender} → [수신] ${toOrg}\n`;
-  } else if (sender) {
-    summary += `[발신] ${sender}\n`;
+  // ── 4. 본문 내용 (제목 이후 ~ 결재라인 이전) ──
+  const titleIdx = lines.findIndex(l => /^제목/.test(l));
+  const signIdx = lines.findIndex(l => /^★|^결재|^주무관/.test(l));
+  const contactIdx = lines.findIndex(l => /^시행|^우\d{5}/.test(l));
+  const endIdx = signIdx > 0 ? signIdx : (contactIdx > 0 ? contactIdx : lines.length);
+  const bodyLines = titleIdx >= 0 ? lines.slice(titleIdx + 1, endIdx) : [];
+  const 본문 = bodyLines.filter(l => l.length > 2 && !/^붙임|^끝\.$/.test(l)).join('\n');
+
+  // ── 5. 관련 근거 ──
+  const reasonLines = bodyLines.filter(l => /^관련|^\s*가\.\s|^\s*나\.\s/.test(l));
+  const 근거 = reasonLines.length > 0 ? reasonLines.join('\n') : '';
+
+  // ── 6. 붙임 목록 ──
+  const 붙임 = bodyLines.filter(l => /^붙임/.test(l)).map(l => l.replace(/^붙임\s*/, '').trim()).filter(Boolean);
+
+  // ── 7. 결재라인 ──
+  const 결재라인 = [];
+  if (signIdx >= 0) {
+    let i = signIdx;
+    let currentRole = '';
+    while (i < lines.length && !/^시행|^우\d{5}/.test(lines[i])) {
+      const line = lines[i];
+      if (/^★/.test(line)) currentRole = line.replace(/^★\s*/, '');
+      else if (/담당$|과장$|국장$|교육장$|교육감$|관장$|장$/.test(line)) currentRole = line;
+      else if (currentRole && line.length >= 2 && line.length <= 10 && !/^\d|^시행|^접수|^우/.test(line)) {
+        결재라인.push({ 직위: currentRole, 이름: line });
+        currentRole = '';
+      }
+      // "협조자" 이후
+      if (line === '협조자') currentRole = '협조자';
+      i++;
+    }
   }
 
-  // [언제]
-  if (date) {
-    const d = date.length >= 8 ? `${date.slice(0,4)}.${date.slice(4,6)}.${date.slice(6,8)}` : date;
-    summary += `[일자] ${d}\n`;
+  // ── 8. 연락처 정보 추출 ──
+  const 연락처 = {};
+  const addrMatch = cleaned.match(/우(\d{5})\s*([^\n/]+)/);
+  if (addrMatch) { 연락처.우편번호 = addrMatch[1]; 연락처.주소 = addrMatch[2].trim(); }
+  const phoneMatch = cleaned.match(/전화\s*([\d-]+)/);
+  if (phoneMatch) 연락처.전화 = phoneMatch[1];
+  const faxMatch = cleaned.match(/전송\s*([\d-]+)/);
+  if (faxMatch) 연락처.팩스 = faxMatch[1];
+  const emailMatch = cleaned.match(/([\w.-]+@[\w.-]+\.\w+)/);
+  if (emailMatch) 연락처.이메일 = emailMatch[1];
+  const urlMatch = cleaned.match(/(https?:\/\/[^\s/]+)/);
+  if (urlMatch) 연락처.홈페이지 = urlMatch[1];
+  const docNoMatch = cleaned.match(/시행\s*([\w-]+\(\))/);
+  if (docNoMatch) 연락처.시행문서번호 = docNoMatch[1];
+
+  // ── 요약 구성 (가독성 높게) ──
+  let s = '';
+  s += `## 문서 개요\n\n`;
+
+  const fmtDate = info.생산일자?.length >= 8
+    ? `${info.생산일자.slice(0,4)}.${info.생산일자.slice(4,6)}.${info.생산일자.slice(6,8)}`
+    : info.생산일자;
+
+  s += `| 구분 | 내용 |\n|------|------|\n`;
+  s += `| 문서유형 | ${문서유형 || '-'} |\n`;
+  s += `| 발신기관 | ${info.기관명} ${info.담당부서} |\n`;
+  if (수신처 && 문서유형 !== '내부결재') s += `| 수신처 | ${수신처} |\n`;
+  s += `| 생산일자 | ${fmtDate} |\n`;
+  s += `| 제목 | ${제목} |\n`;
+
+  // 근거
+  if (근거) {
+    s += `\n## 관련 근거\n\n`;
+    근거.split('\n').forEach(l => { s += `- ${l.trim()}\n`; });
   }
 
-  // [무엇을]
-  summary += `[제목] ${subject}\n`;
-
-  // [왜] 관련 근거
-  if (reason) {
-    summary += `[근거] ${reason}\n`;
+  // 핵심 내용
+  if (본문) {
+    s += `\n## 핵심 내용\n\n`;
+    // 번호 매겨진 항목을 구조화
+    const items = 본문.split(/(?=\d+\.\s)/).filter(l => l.trim().length > 5);
+    if (items.length > 1) {
+      items.forEach(item => { s += `- ${item.trim()}\n`; });
+    } else {
+      s += `${본문.trim()}\n`;
+    }
   }
 
-  // [내용] 핵심 내용
-  if (mainContent) {
-    summary += `[내용] ${mainContent.trim()}`;
+  // 붙임
+  if (붙임.length > 0) {
+    s += `\n## 붙임\n\n`;
+    붙임.forEach((b, i) => { s += `${i + 1}. ${b}\n`; });
   }
 
-  return summary.trim() || cleaned.slice(0, 500);
+  // 결재라인
+  if (결재라인.length > 0) {
+    s += `\n## 결재라인\n\n`;
+    s += `| 직위 | 이름 |\n|------|------|\n`;
+    결재라인.forEach(r => { s += `| ${r.직위} | ${r.이름} |\n`; });
+  }
+
+  // 연락처
+  const 연락처항목 = Object.entries(연락처).filter(([,v]) => v);
+  if (연락처항목.length > 0) {
+    s += `\n## 연락처\n\n`;
+    s += `| 항목 | 내용 |\n|------|------|\n`;
+    연락처항목.forEach(([k, v]) => { s += `| ${k} | ${v} |\n`; });
+  }
+
+  return s.trim();
 }
 
 // Generate content markdown file
@@ -424,6 +497,55 @@ function generateContentMd(fileName, text, summary) {
     md += `\n> (총 ${text.length.toLocaleString()}자 중 100,000자까지 표시)\n`;
   }
   return md;
+}
+
+// 본문에서 결재라인, 연락처, 문서유형 등 추출
+function extractDocExtra(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const cleaned = text.replace(/\s+/g, ' ').trim();
+  const extra = {};
+
+  // 문서유형
+  const rcvLine = lines.find(l => /^수신/.test(l));
+  if (rcvLine) {
+    const rcv = rcvLine.replace(/^수신\s*[:：]?\s*/, '').replace(/\(.*\)/, '').trim();
+    extra.doc_type = (rcv === '내부결재' || !rcv) ? '내부결재' : '외부발송';
+    extra.recipient = rcv || '내부결재';
+  }
+
+  // 결재라인
+  const signIdx = lines.findIndex(l => /^★/.test(l));
+  if (signIdx >= 0) {
+    const chain = [];
+    let role = '';
+    for (let i = signIdx; i < lines.length && !/^시행|^우\d{5}/.test(lines[i]); i++) {
+      const l = lines[i];
+      if (/^★/.test(l)) role = l.replace(/^★\s*/, '');
+      else if (/담당$|과장$|국장$|교육장$|교육감$|관장$|장$|실장$/.test(l)) role = l;
+      else if (role && l.length >= 2 && l.length <= 10 && !/^\d|^시행|^접수|^우/.test(l)) {
+        chain.push({ role, name: l });
+        role = '';
+      }
+      if (l === '협조자') role = '협조자';
+    }
+    if (chain.length > 0) extra.approval_chain = chain;
+  }
+
+  // 연락처
+  const contact = {};
+  const m1 = cleaned.match(/우(\d{5})\s*([^/\n]+)/);
+  if (m1) { contact.zip = m1[1]; contact.address = m1[2].trim(); }
+  const m2 = cleaned.match(/전화\s*([\d-]+)/);
+  if (m2) contact.phone = m2[1];
+  const m3 = cleaned.match(/전송\s*([\d-]+)/);
+  if (m3) contact.fax = m3[1];
+  const m4 = cleaned.match(/([\w.-]+@[\w.-]+\.\w+)/);
+  if (m4) contact.email = m4[1];
+  const m5 = cleaned.match(/(https?:\/\/[^\s/]+)/);
+  if (m5) contact.url = m5[1];
+  if (Object.keys(contact).length > 0) extra.contact_info = contact;
+
+  return extra;
 }
 
 // Upload file to Supabase Storage and return public URL
@@ -920,10 +1042,14 @@ try{
             const textContent = await extractTextContent(fileBuf, f.fileNm);
             if (textContent && textContent.trim().length > 0) {
               f._content = textContent.trim();
-              f._summary = generateSummary(f._content, title, {
-                proc_instt_nm: insttNm, chrg_dept_nm: detailDeptNm,
-                charger_nm: chargerNm, prdctn_dt: pDate, info_sj: title,
-              });
+              const summaryMeta = { proc_instt_nm: insttNm, chrg_dept_nm: detailDeptNm, charger_nm: chargerNm, prdctn_dt: pDate, info_sj: title };
+              f._summary = generateSummary(f._content, title, summaryMeta);
+
+              // 본문(결재문서)에서 추가 메타데이터 추출 → 문서 레코드에 저장
+              if (f.fileSeDc === '본문') {
+                f._docExtra = extractDocExtra(f._content);
+              }
+
               // MD 파일로 저장
               const contentMd = generateContentMd(f.fileNm, f._content, f._summary);
               const contentFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_내용`, 200) + '.md';
@@ -1048,6 +1174,18 @@ try{
         instt_cd: insttCd,
         instt_se_cd: insttSeCd,
         status: 'ok',
+        // 본문에서 추출한 추가 메타데이터
+        ...((() => {
+          const bodyFile = fileList.find(f => f.fileSeDc === '본문' && f._docExtra);
+          if (!bodyFile?._docExtra) return {};
+          const ex = bodyFile._docExtra;
+          return {
+            doc_type: ex.doc_type || null,
+            recipient: ex.recipient || null,
+            approval_chain: ex.approval_chain ? JSON.stringify(ex.approval_chain) : null,
+            contact_info: ex.contact_info ? JSON.stringify(ex.contact_info) : null,
+          };
+        })()),
       });
 
       // Step F: Supabase sync - files

@@ -54,3 +54,5 @@ collector/test_5w1h/
 collector/zip_test/
 collector/public_test/
 collector/final_test/
+collector/summary_test/
+collector/final_summary/
