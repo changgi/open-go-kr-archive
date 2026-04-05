@@ -346,15 +346,15 @@ function generateSummary(text, title, metadata) {
 
   // 본문에서 수신처 추출
   const toMatch = cleaned.match(/수신\s*[:：]?\s*([^\n(]+)/);
-  const toOrg = toMatch ? toMatch[1].trim().slice(0, 50) : '';
+  const toOrg = toMatch ? toMatch[1].trim() : '';
 
   // 본문에서 제목 추출
   const subjectMatch = cleaned.match(/제목\s*[:：]?\s*([^\n]+)/);
-  const subject = subjectMatch ? subjectMatch[1].trim().slice(0, 100) : docTitle;
+  const subject = subjectMatch ? subjectMatch[1].trim() : docTitle;
 
   // 본문에서 관련 근거/이유 추출
   const reasonMatch = cleaned.match(/(?:관련\s*[:：]?\s*([^\n]+))/);
-  const reason = reasonMatch ? reasonMatch[1].trim().slice(0, 100) : '';
+  const reason = reasonMatch ? reasonMatch[1].trim() : '';
 
   // 본문에서 핵심 내용 추출 (제목 다음 문장들)
   const contentStart = cleaned.indexOf('제목');
@@ -362,10 +362,10 @@ function generateSummary(text, title, metadata) {
   if (contentStart >= 0) {
     const afterTitle = cleaned.slice(contentStart);
     const lines = afterTitle.split(/\d+\.\s+/).filter(s => s.length > 15);
-    mainContent = lines.slice(1, 4).join(' ').slice(0, 200);
+    mainContent = lines.slice(1, 6).join(' ');
   }
   if (!mainContent) {
-    mainContent = cleaned.slice(0, 200);
+    mainContent = cleaned.slice(0, 500);
   }
 
   // 6하 원칙 요약 구성
@@ -398,7 +398,7 @@ function generateSummary(text, title, metadata) {
     summary += `[내용] ${mainContent.trim()}`;
   }
 
-  return summary.trim().slice(0, 800) || cleaned.slice(0, 300);
+  return summary.trim() || cleaned.slice(0, 500);
 }
 
 // Generate content markdown file
