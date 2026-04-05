@@ -53,6 +53,17 @@ function sanitize(name, maxLen = 40) {
     .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .slice(0, maxLen).trim() || 'untitled';
 }
+// ── Timing utilities ──
+function now() { return Date.now(); }
+function elapsed(start) {
+  const ms = Date.now() - start;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
+  return `${Math.floor(ms/60000)}m${Math.floor((ms%60000)/1000)}s`;
+}
+function timestamp() { return new Date().toISOString().slice(11, 19); }
+function tlog(msg) { console.log(`[${timestamp()}] ${msg}`); }
+
 function formatBytes(b) {
   if (!b) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB']; let i = 0, s = b;
@@ -305,7 +316,7 @@ async function extractTextContent(buf, fileName) {
       return buf.toString('utf8').slice(0, 500000);
     }
   } catch (e) {
-    console.log(`    → 텍스트 추출 실패: ${e.message?.slice(0, 80)}`);
+    tlog(`    → 텍스트 추출 실패: ${e.message?.slice(0, 80)}`);
   }
   return '';
 }
@@ -608,13 +619,14 @@ async function syncToSupabase(doc) {
 // ── Main ──
 async function main() {
   const opts = parseArgs();
-  console.log(`[수집 시작] 키워드='${opts.keyword}' 기간=${opts.startDate}~${opts.endDate} 최대=${opts.maxCount}건`);
+  const totalStart = now();
+  tlog(`[수집 시작] 키워드='${opts.keyword}' 기간=${opts.startDate}~${opts.endDate} 최대=${opts.maxCount}건`);
 
   // Prepare output
   fs.mkdirSync(opts.outputDir, { recursive: true });
   const csvPath = path.join(opts.outputDir, 'collection_log.csv');
   if (!fs.existsSync(csvPath)) {
-    fs.writeFileSync(csvPath, '번호,원문등록번호,제목,처리시각,상태,공개구분,기관명,비고\n', 'utf8');
+    fs.writeFileSync(csvPath, '번호,원문등록번호,제목,처리시각,상태,다운로드,공개구분,기관명,소요시간,비고\n', 'utf8');
   }
 
   // Paginate and collect
@@ -625,7 +637,8 @@ async function main() {
   while (collected < opts.maxCount) {
     const remaining = opts.maxCount - collected;
 
-    console.log(`\n[페이지 ${page}] 접속 + 조회 중... (수집 ${collected}/${opts.maxCount})`);
+    const pageStart = now();
+    tlog(`\n[페이지 ${page}] 접속 + 조회 중... (수집 ${collected}/${opts.maxCount})`);
 
     // goto + AJAX in single cheliped call to maintain session
     const listJs = `
@@ -651,7 +664,7 @@ async function main() {
       console.error('[실패] 사이트 접속 불가');
       break;
     }
-    if (page === 1) console.log('[브라우저] 접속 성공');
+    if (page === 1) tlog(`[브라우저] 접속 성공 (${elapsed(pageStart)})`);
 
     const jsResult = results?.[1]?.result?.result;
     let listData = null;
@@ -670,11 +683,11 @@ async function main() {
     const items = listData.list || [];
 
     if (page === 1) {
-      console.log(`[목록] 전체 ${totalFound}건 발견`);
+      tlog(`[목록] 전체 ${totalFound}건 발견 (${elapsed(pageStart)})`);
     }
 
     if (items.length === 0) {
-      console.log('[완료] 더 이상 결과 없음');
+      tlog('[완료] 더 이상 결과 없음');
       break;
     }
 
@@ -701,11 +714,12 @@ async function main() {
       const folderName = `${collected}_${sanitize(title)}`;
       const folderPath = path.join(opts.outputDir, folderName);
 
-      console.log(`  [${collected}] ${title.slice(0, 55)} (${insttNm})`);
+      const docStart = now();
+      tlog(`  [${collected}] ${title.slice(0, 55)} (${insttNm})`);
 
       // Resume
       if (fs.existsSync(folderPath)) {
-        console.log('    → 건너뜀 (이미 존재)');
+        tlog('    → 건너뜀 (이미 존재)');
         continue;
       }
 
@@ -759,7 +773,7 @@ var tries=0;var iv=setInterval(function(){tries++;
           prsrvPdCd = dom['보존기간'] || '';
           if (dom['담당부서명'] && !deptNm) detailDeptNm = dom['담당부서명'];
           if (dom['문서번호'] && !docNo) detailDocNo = dom['문서번호'];
-          console.log(`    → 상세: 분류=${fullNstClNm.slice(0,40)}... 보존=${prsrvPdCd}`);
+          tlog(`    → 상세: 분류=${fullNstClNm.slice(0,40)}... 보존=${prsrvPdCd} (${elapsed(docStart)})`);
 
           // VO data (may or may not be available yet)
           if (combined.hasVO && combined.vo) {
@@ -794,7 +808,7 @@ var tries=0;var iv=setInterval(function(){tries++;
       }
 
       if (fileList.length > 0) {
-        console.log(`    → 파일: ${fileList.length}개 (${fileList.map(f => f.fileSeDc + ':' + (f.fileNm || '').slice(0,20)).join(', ')})`);
+        tlog(`    → 파일: ${fileList.length}개 (${fileList.map(f => f.fileSeDc + ':' + (f.fileNm || '').slice(0,20)).join(', ')}) (${elapsed(docStart)})`);
       }
 
       // Step C: Write metadata.md with full file info
@@ -840,7 +854,7 @@ var tries=0;var iv=setInterval(function(){tries++;
         for (const f of fileList) {
           const [dlOk, dlReason] = canDownload(voData.oppSeCd, f.fileOppYn, voData.urtxtYn, voData.dtaRedgLmttEndYmd);
           if (!dlOk) {
-            console.log(`    → 파일 건너뜀: ${f.fileNm} (${dlReason})`);
+            tlog(`    → 파일 건너뜀: ${f.fileNm} (${dlReason})`);
             continue;
           }
 
@@ -894,12 +908,12 @@ try{
             fs.writeFileSync(path.join(folderPath, fname), fileBuf);
             downloadCount++;
             f._downloaded = true;
-            console.log(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)})`);
+            tlog(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)}) (${elapsed(docStart)})`);
 
             // 파일 속성 추출
             f._properties = extractFileProperties(fileBuf, f.fileNm);
             if (Object.keys(f._properties).length > 1) {
-              console.log(`    → 속성: ${Object.keys(f._properties).filter(k => k !== 'size_bytes' && k !== 'mime_type').join(', ')}`);
+              tlog(`    → 속성: ${Object.keys(f._properties).filter(k => k !== 'size_bytes' && k !== 'mime_type').join(', ')}`);
             }
 
             // 텍스트 내용 추출
@@ -914,14 +928,14 @@ try{
               const contentMd = generateContentMd(f.fileNm, f._content, f._summary);
               const contentFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_내용`, 200) + '.md';
               fs.writeFileSync(path.join(folderPath, contentFname), contentMd, 'utf8');
-              console.log(`    → 내용: ${f._content.length.toLocaleString()}자 추출, 요약: ${f._summary.slice(0, 50)}...`);
+              tlog(`    → 내용: ${f._content.length.toLocaleString()}자 추출 (${elapsed(docStart)})`);
             }
 
             // Supabase Storage 업로드
             const storagePath = `${regNo}/${fname}`;
             f._downloadUrl = await uploadToStorage(fileBuf, storagePath);
             if (f._downloadUrl) {
-              console.log(`    → Storage: 업로드 완료`);
+              tlog(`    → Storage: 업로드 완료`);
             }
 
             // ZIP 파일 구조 분석
@@ -933,15 +947,15 @@ try{
                   const structMd = generateZipStructureMd(f.fileNm, zipEntries);
                   const structFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_구조`, 200) + '.md';
                   fs.writeFileSync(path.join(folderPath, structFname), structMd, 'utf8');
-                  console.log(`    → ZIP 구조: ${zipEntries.filter(e => !e.path.endsWith('/')).length}개 파일 분석`);
+                  tlog(`    → ZIP 구조: ${zipEntries.filter(e => !e.path.endsWith('/')).length}개 파일 분석`);
                 }
               } catch (ze) {
-                console.log(`    → ZIP 분석 실패: ${ze.message}`);
+                tlog(`    → ZIP 분석 실패: ${ze.message}`);
               }
             }
           } else {
             f._downloaded = false;
-            console.log(`    → 다운로드 실패: ${f.fileNm} (step ${dlData?.step || '?'}, ${dlData?.error || ''})`);
+            tlog(`    → 다운로드 실패: ${f.fileNm} (step ${dlData?.step || '?'}, ${dlData?.error || ''})`);
           }
         }
       }
@@ -1071,9 +1085,11 @@ try{
         }
       }
 
-      // CSV log
+      // CSV log with timing
+      const docElapsed = elapsed(docStart);
+      tlog(`    → 문서 완료 (파일 ${downloadCount}개, ${docElapsed})`);
       fs.appendFileSync(csvPath,
-        `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},ok,${downloadCount},${oppLabel},${insttNm}\n`, 'utf8');
+        `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},ok,${downloadCount},${oppLabel},${insttNm},${docElapsed},\n`, 'utf8');
     }
 
     if (items.length < perPage) break;
@@ -1081,7 +1097,7 @@ try{
   }
 
   cheliped([{ cmd: 'close' }]);
-  console.log(`\n[완료] 총 ${collected}건 수집, 출력: ${opts.outputDir}`);
+  tlog(`\n[완료] 총 ${collected}건 수집, 총 소요시간: ${elapsed(totalStart)}, 출력: ${opts.outputDir}`);
 }
 
 main().catch(e => { console.error('[오류]', e); process.exit(1); });
