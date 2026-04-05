@@ -332,13 +332,73 @@ function extractDocxText(buf) {
 }
 
 // Generate summary from extracted text
-function generateSummary(text, title) {
+// 6하 원칙 기반 요약 (누가, 누구에게, 언제, 어디서, 무엇을, 왜)
+function generateSummary(text, title, metadata) {
   if (!text || text.trim().length < 10) return '';
   const cleaned = text.replace(/\s+/g, ' ').trim();
-  // Take first 3 meaningful sentences or 500 chars
-  const sentences = cleaned.split(/[.。!?]\s+/).filter(s => s.length > 10);
-  const summary = sentences.slice(0, 5).join('. ').slice(0, 500);
-  return summary || cleaned.slice(0, 300);
+
+  // 메타데이터에서 기본 정보 추출
+  const who = metadata?.proc_instt_nm || '';       // 발신 기관
+  const dept = metadata?.chrg_dept_nm || '';        // 담당부서
+  const person = metadata?.charger_nm || '';        // 담당자
+  const date = metadata?.prdctn_dt || '';           // 생산일자
+  const docTitle = title || metadata?.info_sj || '';
+
+  // 본문에서 수신처 추출
+  const toMatch = cleaned.match(/수신\s*[:：]?\s*([^\n(]+)/);
+  const toOrg = toMatch ? toMatch[1].trim().slice(0, 50) : '';
+
+  // 본문에서 제목 추출
+  const subjectMatch = cleaned.match(/제목\s*[:：]?\s*([^\n]+)/);
+  const subject = subjectMatch ? subjectMatch[1].trim().slice(0, 100) : docTitle;
+
+  // 본문에서 관련 근거/이유 추출
+  const reasonMatch = cleaned.match(/(?:관련\s*[:：]?\s*([^\n]+))/);
+  const reason = reasonMatch ? reasonMatch[1].trim().slice(0, 100) : '';
+
+  // 본문에서 핵심 내용 추출 (제목 다음 문장들)
+  const contentStart = cleaned.indexOf('제목');
+  let mainContent = '';
+  if (contentStart >= 0) {
+    const afterTitle = cleaned.slice(contentStart);
+    const lines = afterTitle.split(/\d+\.\s+/).filter(s => s.length > 15);
+    mainContent = lines.slice(1, 4).join(' ').slice(0, 200);
+  }
+  if (!mainContent) {
+    mainContent = cleaned.slice(0, 200);
+  }
+
+  // 6하 원칙 요약 구성
+  let summary = '';
+
+  // [누가] → [누구에게]
+  const sender = [who, dept, person].filter(Boolean).join(' ');
+  if (sender && toOrg) {
+    summary += `[발신] ${sender} → [수신] ${toOrg}\n`;
+  } else if (sender) {
+    summary += `[발신] ${sender}\n`;
+  }
+
+  // [언제]
+  if (date) {
+    const d = date.length >= 8 ? `${date.slice(0,4)}.${date.slice(4,6)}.${date.slice(6,8)}` : date;
+    summary += `[일자] ${d}\n`;
+  }
+
+  // [무엇을]
+  summary += `[제목] ${subject}\n`;
+
+  // [왜] 관련 근거
+  if (reason) {
+    summary += `[근거] ${reason}\n`;
+  }
+
+  // [내용] 핵심 내용
+  if (mainContent) {
+    summary += `[내용] ${mainContent.trim()}`;
+  }
+
+  return summary.trim().slice(0, 800) || cleaned.slice(0, 300);
 }
 
 // Generate content markdown file
@@ -846,7 +906,10 @@ try{
             const textContent = await extractTextContent(fileBuf, f.fileNm);
             if (textContent && textContent.trim().length > 0) {
               f._content = textContent.trim();
-              f._summary = generateSummary(f._content, f.fileNm);
+              f._summary = generateSummary(f._content, title, {
+                proc_instt_nm: insttNm, chrg_dept_nm: detailDeptNm,
+                charger_nm: chargerNm, prdctn_dt: pDate, info_sj: title,
+              });
               // MD 파일로 저장
               const contentMd = generateContentMd(f.fileNm, f._content, f._summary);
               const contentFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_내용`, 200) + '.md';
