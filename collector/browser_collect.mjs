@@ -75,6 +75,230 @@ function canDownload(oppSeCd, fileOppYn, urtxtYn, dtaRedgLmttEndYmd) {
 }
 
 const OPP_LABELS = { '1': '공개', '2': '부분공개', '3': '비공개', '5': '열람제한' };
+
+// ── File property extraction ──
+function extractFileProperties(buf, fileName) {
+  const props = { size_bytes: buf.length };
+  const ext = getFileExt(fileName).toLowerCase();
+
+  // JPEG EXIF
+  if ((ext === '.jpg' || ext === '.jpeg') && buf[0] === 0xFF && buf[1] === 0xD8) {
+    props.mime_type = 'image/jpeg';
+    try { Object.assign(props, parseExif(buf)); } catch {}
+  }
+  // PNG
+  else if (ext === '.png' && buf[0] === 0x89 && buf[1] === 0x50) {
+    props.mime_type = 'image/png';
+    if (buf.length > 24) {
+      props.image_width = buf.readUInt32BE(16);
+      props.image_height = buf.readUInt32BE(20);
+      const bitDepth = buf[24];
+      props.bit_depth = bitDepth;
+    }
+  }
+  // GIF
+  else if (ext === '.gif' && buf[0] === 0x47) {
+    props.mime_type = 'image/gif';
+    if (buf.length > 10) {
+      props.image_width = buf.readUInt16LE(6);
+      props.image_height = buf.readUInt16LE(8);
+    }
+  }
+  // BMP
+  else if (ext === '.bmp' && buf[0] === 0x42 && buf[1] === 0x4D) {
+    props.mime_type = 'image/bmp';
+    if (buf.length > 26) {
+      props.image_width = buf.readInt32LE(18);
+      props.image_height = Math.abs(buf.readInt32LE(22));
+      props.bit_depth = buf.readUInt16LE(28);
+    }
+  }
+  // TIFF (often from scanners)
+  else if (ext === '.tif' || ext === '.tiff') {
+    props.mime_type = 'image/tiff';
+    try { Object.assign(props, parseTiffBasic(buf)); } catch {}
+  }
+  // PDF
+  else if (ext === '.pdf' && buf[0] === 0x25 && buf[1] === 0x50) {
+    props.mime_type = 'application/pdf';
+    // Extract PDF version
+    const header = buf.slice(0, 20).toString('ascii');
+    const m = header.match(/PDF-(\d+\.\d+)/);
+    if (m) props.pdf_version = m[1];
+    // Page count estimation (simple: count /Type /Page)
+    const text = buf.toString('ascii', 0, Math.min(buf.length, 500000));
+    const pages = (text.match(/\/Type\s*\/Page[^s]/g) || []).length;
+    if (pages > 0) props.page_count = pages;
+  }
+  // Video formats
+  else if (['.mp4', '.avi', '.mov', '.wmv', '.mkv', '.webm'].includes(ext)) {
+    props.mime_type = `video/${ext.slice(1)}`;
+    if (ext === '.mp4' || ext === '.mov') {
+      try { Object.assign(props, parseMp4Basic(buf)); } catch {}
+    }
+  }
+  // HWP
+  else if (ext === '.hwp') {
+    props.mime_type = 'application/x-hwp';
+    if (buf[0] === 0xD0 && buf[1] === 0xCF) props.format = 'OLE2 (HWP binary)';
+    else if (buf.slice(0, 4).toString() === 'HWP ') props.format = 'HWP Document';
+  }
+  // Office formats
+  else if (['.xlsx', '.docx', '.pptx'].includes(ext)) {
+    props.mime_type = ext === '.xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : ext === '.docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      : 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    if (buf[0] === 0x50 && buf[1] === 0x4B) props.format = 'Office Open XML (ZIP-based)';
+  }
+
+  return props;
+}
+
+// Parse JPEG EXIF for image dimensions, DPI, camera info
+function parseExif(buf) {
+  const props = {};
+  let offset = 2;
+  while (offset < buf.length - 4) {
+    if (buf[offset] !== 0xFF) break;
+    const marker = buf[offset + 1];
+    if (marker === 0xDA) break; // Start of scan
+    const segLen = buf.readUInt16BE(offset + 2);
+
+    // SOFn markers for dimensions
+    if ((marker >= 0xC0 && marker <= 0xC3) || (marker >= 0xC5 && marker <= 0xC7)) {
+      if (offset + 9 <= buf.length) {
+        props.bit_depth = buf[offset + 4];
+        props.image_height = buf.readUInt16BE(offset + 5);
+        props.image_width = buf.readUInt16BE(offset + 7);
+      }
+    }
+    // APP1 = EXIF
+    if (marker === 0xE1 && offset + 10 < buf.length) {
+      const exifStr = buf.slice(offset + 4, offset + 8).toString('ascii');
+      if (exifStr === 'Exif') {
+        try { Object.assign(props, parseExifIFD(buf, offset + 10)); } catch {}
+      }
+    }
+    // JFIF for DPI
+    if (marker === 0xE0 && offset + 14 < buf.length) {
+      const units = buf[offset + 11];
+      const xDpi = buf.readUInt16BE(offset + 12);
+      const yDpi = buf.readUInt16BE(offset + 14);
+      if (units === 1) { props.dpi_x = xDpi; props.dpi_y = yDpi; }
+    }
+    offset += 2 + segLen;
+  }
+  return props;
+}
+
+function parseExifIFD(buf, tiffStart) {
+  const props = {};
+  const le = buf.readUInt16BE(tiffStart) === 0x4949; // little endian
+  const r16 = le ? (o) => buf.readUInt16LE(o) : (o) => buf.readUInt16BE(o);
+  const r32 = le ? (o) => buf.readUInt32LE(o) : (o) => buf.readUInt32BE(o);
+
+  const ifdOffset = r32(tiffStart + 4);
+  const ifdStart = tiffStart + ifdOffset;
+  if (ifdStart + 2 > buf.length) return props;
+  const entries = r16(ifdStart);
+
+  for (let i = 0; i < entries && ifdStart + 2 + i * 12 + 12 <= buf.length; i++) {
+    const eOff = ifdStart + 2 + i * 12;
+    const tag = r16(eOff);
+    const type = r16(eOff + 2);
+    const valOff = type <= 2 && r32(eOff + 4) <= 4 ? eOff + 8 : tiffStart + r32(eOff + 8);
+
+    const readStr = (off, len) => {
+      if (off + len > buf.length) return '';
+      return buf.slice(off, off + len).toString('ascii').replace(/\0/g, '').trim();
+    };
+
+    switch (tag) {
+      case 0x010F: props.camera_make = readStr(valOff, r32(eOff + 4)); break;
+      case 0x0110: props.camera_model = readStr(valOff, r32(eOff + 4)); break;
+      case 0x0131: props.software = readStr(valOff, r32(eOff + 4)); break;
+      case 0x0132: props.date_taken = readStr(valOff, r32(eOff + 4)); break;
+      case 0x011A: // X Resolution
+        if (valOff + 8 <= buf.length) props.dpi_x = r32(valOff) / (r32(valOff + 4) || 1);
+        break;
+      case 0x011B: // Y Resolution
+        if (valOff + 8 <= buf.length) props.dpi_y = r32(valOff) / (r32(valOff + 4) || 1);
+        break;
+      case 0xA003: props.image_height_exif = r32(eOff + 8); break;
+      case 0xA002: props.image_width_exif = r32(eOff + 8); break;
+    }
+  }
+  return props;
+}
+
+function parseTiffBasic(buf) {
+  const props = {};
+  const le = buf[0] === 0x49;
+  const r16 = le ? (o) => buf.readUInt16LE(o) : (o) => buf.readUInt16BE(o);
+  const r32 = le ? (o) => buf.readUInt32LE(o) : (o) => buf.readUInt32BE(o);
+  const ifdOff = r32(4);
+  if (ifdOff + 2 > buf.length) return props;
+  const entries = r16(ifdOff);
+  for (let i = 0; i < entries && ifdOff + 2 + i * 12 + 12 <= buf.length; i++) {
+    const e = ifdOff + 2 + i * 12;
+    const tag = r16(e);
+    if (tag === 0x0100) props.image_width = r32(e + 8);
+    if (tag === 0x0101) props.image_height = r32(e + 8);
+    if (tag === 0x0102) props.bit_depth = r16(e + 8);
+    if (tag === 0x010F) { const off = r32(e + 8); props.scanner_make = buf.slice(off, off + r32(e + 4)).toString('ascii').replace(/\0/g, '').trim(); }
+    if (tag === 0x0110) { const off = r32(e + 8); props.scanner_model = buf.slice(off, off + r32(e + 4)).toString('ascii').replace(/\0/g, '').trim(); }
+    if (tag === 0x0131) { const off = r32(e + 8); props.software = buf.slice(off, off + r32(e + 4)).toString('ascii').replace(/\0/g, '').trim(); }
+    if (tag === 0x011A && r32(e + 8) + 8 <= buf.length) { const off = r32(e + 8); props.dpi_x = r32(off) / (r32(off + 4) || 1); }
+    if (tag === 0x011B && r32(e + 8) + 8 <= buf.length) { const off = r32(e + 8); props.dpi_y = r32(off) / (r32(off + 4) || 1); }
+  }
+  return props;
+}
+
+function parseMp4Basic(buf) {
+  const props = {};
+  let pos = 0;
+  while (pos + 8 < buf.length && pos < 100000) {
+    const size = buf.readUInt32BE(pos);
+    const type = buf.slice(pos + 4, pos + 8).toString('ascii');
+    if (size < 8) break;
+    if (type === 'mvhd' && pos + 28 < buf.length) {
+      const timescale = buf.readUInt32BE(pos + 20);
+      const duration = buf.readUInt32BE(pos + 24);
+      if (timescale > 0) props.duration_seconds = Math.round(duration / timescale);
+    }
+    if (type === 'tkhd' && pos + 84 < buf.length) {
+      props.video_width = buf.readUInt32BE(pos + 76) >> 16;
+      props.video_height = buf.readUInt32BE(pos + 80) >> 16;
+    }
+    // Recurse into container atoms
+    if (['moov', 'trak', 'mdia', 'minf', 'stbl'].includes(type)) {
+      pos += 8; continue;
+    }
+    pos += size;
+  }
+  return props;
+}
+
+// Upload file to Supabase Storage and return public URL
+async function uploadToStorage(buf, storagePath) {
+  if (!supabaseUrl || !supabaseKey) return null;
+  try {
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/documents/${storagePath}`, {
+      method: 'POST',
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+        'Content-Type': 'application/octet-stream',
+        'x-upsert': 'true',
+      },
+      body: buf,
+    });
+    if (res.ok) {
+      return `${supabaseUrl}/storage/v1/object/public/documents/${storagePath}`;
+    }
+  } catch {}
+  return null;
+}
 const ARCHIVE_EXTS = ['.zip', '.7z', '.rar', '.tar', '.gz', '.tgz'];
 
 function getFileExt(name) {
@@ -536,6 +760,19 @@ try{
             f._downloaded = true;
             console.log(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)})`);
 
+            // 파일 속성 추출
+            f._properties = extractFileProperties(fileBuf, f.fileNm);
+            if (Object.keys(f._properties).length > 1) {
+              console.log(`    → 속성: ${Object.keys(f._properties).filter(k => k !== 'size_bytes' && k !== 'mime_type').join(', ')}`);
+            }
+
+            // Supabase Storage 업로드
+            const storagePath = `${regNo}/${fname}`;
+            f._downloadUrl = await uploadToStorage(fileBuf, storagePath);
+            if (f._downloadUrl) {
+              console.log(`    → Storage: 업로드 완료`);
+            }
+
             // ZIP 파일 구조 분석
             if (isArchiveFile(f.fileNm) && f.fileNm.toLowerCase().endsWith('.zip')) {
               try {
@@ -575,9 +812,34 @@ try{
           fileMd += `| 공개여부 | ${dlOk ? '공개' : '비공개'} (fileOppYn=${f.fileOppYn}) |\n`;
           fileMd += `| 압축파일 | ${isArchiveFile(f.fileNm) ? '예' : '아니오'} |\n`;
           fileMd += `| 다운로드 | ${f._downloaded ? '완료' : (dlOk ? '실패' : '건너뜀')} |\n`;
+          if (f._downloadUrl) {
+            fileMd += `| 다운로드 링크 | [다운로드](${f._downloadUrl}) |\n`;
+          }
           if (f._archiveEntries) {
             const fileCount = f._archiveEntries.filter(e => !e.path.endsWith('/')).length;
             fileMd += `| ZIP 내부 파일 수 | ${fileCount}개 |\n`;
+          }
+          // 파일 상세 속성
+          if (f._properties) {
+            const p = f._properties;
+            if (p.mime_type) fileMd += `| MIME 타입 | ${p.mime_type} |\n`;
+            if (p.pdf_version) fileMd += `| PDF 버전 | ${p.pdf_version} |\n`;
+            if (p.page_count) fileMd += `| 페이지 수 | ${p.page_count} |\n`;
+            if (p.image_width) fileMd += `| 이미지 너비 | ${p.image_width}px |\n`;
+            if (p.image_height) fileMd += `| 이미지 높이 | ${p.image_height}px |\n`;
+            if (p.dpi_x) fileMd += `| 수평 해상도 | ${p.dpi_x} DPI |\n`;
+            if (p.dpi_y) fileMd += `| 수직 해상도 | ${p.dpi_y} DPI |\n`;
+            if (p.bit_depth) fileMd += `| 비트 수준 | ${p.bit_depth}bit |\n`;
+            if (p.camera_make) fileMd += `| 카메라 제조사 | ${p.camera_make} |\n`;
+            if (p.camera_model) fileMd += `| 카메라 모델 | ${p.camera_model} |\n`;
+            if (p.scanner_make) fileMd += `| 스캐너 제조사 | ${p.scanner_make} |\n`;
+            if (p.scanner_model) fileMd += `| 스캐너 모델 | ${p.scanner_model} |\n`;
+            if (p.software) fileMd += `| 소프트웨어 | ${p.software} |\n`;
+            if (p.date_taken) fileMd += `| 촬영일 | ${p.date_taken} |\n`;
+            if (p.format) fileMd += `| 포맷 | ${p.format} |\n`;
+            if (p.duration_seconds) fileMd += `| 영상 길이 | ${p.duration_seconds}초 |\n`;
+            if (p.video_width) fileMd += `| 영상 너비 | ${p.video_width}px |\n`;
+            if (p.video_height) fileMd += `| 영상 높이 | ${p.video_height}px |\n`;
           }
           fileMd += `\n`;
         });
@@ -613,7 +875,7 @@ try{
         for (const f of fileList) {
           const [dlOk] = canDownload(voData?.oppSeCd || oppSeCd, f.fileOppYn, voData?.urtxtYn || 'Y', '');
           try {
-            await fetch(`${supabaseUrl}/rest/v1/files`, {
+            await fetch(`${supabaseUrl}/rest/v1/files?on_conflict=file_id`, {
               method: 'POST',
               headers: {
                 'apikey': supabaseKey,
@@ -632,6 +894,8 @@ try{
                 file_ext: getFileExt(f.fileNm) || null,
                 is_archive: isArchiveFile(f.fileNm),
                 archive_entries: f._archiveEntries ? JSON.stringify(f._archiveEntries) : null,
+                file_properties: f._properties ? JSON.stringify(f._properties) : null,
+                download_url: f._downloadUrl || null,
               }),
             });
           } catch {}

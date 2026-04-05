@@ -87,69 +87,92 @@ export default async function DocumentDetailPage({ params }: Props) {
           </p>
         ) : (
           <div className="divide-y">
-            {document.files.map((f: any) => (
-              <div key={f.id} className="px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-primary-600 px-1.5 py-0.5 bg-primary-50 rounded">
-                      {f.file_se_dc || "기타"}
-                    </span>
-                    {f.file_ext && (
-                      <span className="text-xs font-mono text-gray-500 px-1.5 py-0.5 bg-gray-100 rounded">
-                        {f.file_ext}
+            {document.files.map((f: any, idx: number) => {
+              let props: any = {};
+              try { props = typeof f.file_properties === 'string' ? JSON.parse(f.file_properties) : (f.file_properties || {}); } catch {}
+              let archiveEntries: any[] = [];
+              try { archiveEntries = typeof f.archive_entries === 'string' ? JSON.parse(f.archive_entries) : (f.archive_entries || []); } catch {}
+              const fileEntries = archiveEntries.filter((e: any) => !e.path?.endsWith('/'));
+
+              return (
+                <div key={f.id} className="px-4 py-4">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-white px-2 py-0.5 bg-primary-600 rounded">
+                        {f.file_se_dc || "기타"}
                       </span>
-                    )}
-                    <span className="text-sm text-gray-900">{f.file_nm}</span>
-                    <span className="text-xs text-gray-400">
-                      ({formatFileSize(f.file_byte_num)})
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {f.downloaded && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">
-                        다운로드됨
-                      </span>
-                    )}
-                    {f.is_archive && (
-                      <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">
-                        압축파일
-                      </span>
-                    )}
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded ${
-                        f.file_opp_yn === "Y"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-red-100 text-red-700"
-                      }`}
-                    >
-                      {f.file_opp_yn === "Y" ? "공개" : "비공개"}
-                    </span>
-                  </div>
-                </div>
-                {/* ZIP archive entries */}
-                {f.archive_entries && (() => {
-                  let entries: any[] = [];
-                  try { entries = typeof f.archive_entries === 'string' ? JSON.parse(f.archive_entries) : f.archive_entries; } catch {}
-                  const fileEntries = entries.filter((e: any) => !e.path?.endsWith('/'));
-                  if (fileEntries.length === 0) return null;
-                  return (
-                    <div className="mt-2 ml-4 p-2 bg-gray-50 rounded text-xs">
-                      <p className="font-medium text-gray-600 mb-1">ZIP 내부 ({fileEntries.length}개 파일)</p>
-                      <ul className="space-y-0.5 text-gray-500">
-                        {fileEntries.slice(0, 10).map((e: any, i: number) => (
-                          <li key={i} className="font-mono">
-                            {e.path} <span className="text-gray-400">({formatFileSize(e.size)})</span>
-                          </li>
-                        ))}
-                        {fileEntries.length > 10 && (
-                          <li className="text-gray-400">... 외 {fileEntries.length - 10}개</li>
-                        )}
-                      </ul>
+                      {f.file_ext && (
+                        <span className="text-xs font-mono text-gray-600 px-1.5 py-0.5 bg-gray-100 rounded border">
+                          {f.file_ext}
+                        </span>
+                      )}
+                      <span className="text-sm font-medium text-gray-900">{f.file_nm}</span>
                     </div>
-                  );
-                })()}
-              </div>
-            ))}
+                    <div className="flex items-center gap-2">
+                      {f.download_url ? (
+                        <a
+                          href={f.download_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs px-3 py-1 rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors"
+                        >
+                          다운로드
+                        </a>
+                      ) : f.downloaded ? (
+                        <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">수집됨</span>
+                      ) : null}
+                      <span className={`text-xs px-2 py-0.5 rounded ${
+                        f.file_opp_yn === "Y" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                      }`}>
+                        {f.file_opp_yn === "Y" ? "공개" : "비공개"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* File attributes table */}
+                  <div className="ml-2 bg-gray-50 rounded p-3 text-xs">
+                    <table className="w-full">
+                      <tbody className="divide-y divide-gray-200">
+                        <tr><td className="py-1 text-gray-500 w-32">크기</td><td className="py-1">{formatFileSize(f.file_byte_num)} ({Number(f.file_byte_num || 0).toLocaleString()} bytes)</td></tr>
+                        {props.mime_type && <tr><td className="py-1 text-gray-500">MIME 타입</td><td className="py-1 font-mono">{props.mime_type}</td></tr>}
+                        {props.pdf_version && <tr><td className="py-1 text-gray-500">PDF 버전</td><td className="py-1">{props.pdf_version}</td></tr>}
+                        {props.page_count && <tr><td className="py-1 text-gray-500">페이지 수</td><td className="py-1">{props.page_count}</td></tr>}
+                        {props.image_width && <tr><td className="py-1 text-gray-500">이미지 크기</td><td className="py-1">{props.image_width} x {props.image_height}px</td></tr>}
+                        {props.dpi_x && <tr><td className="py-1 text-gray-500">해상도</td><td className="py-1">{props.dpi_x} x {props.dpi_y} DPI</td></tr>}
+                        {props.bit_depth && <tr><td className="py-1 text-gray-500">비트 수준</td><td className="py-1">{props.bit_depth}bit</td></tr>}
+                        {props.camera_make && <tr><td className="py-1 text-gray-500">카메라</td><td className="py-1">{props.camera_make} {props.camera_model}</td></tr>}
+                        {props.scanner_make && <tr><td className="py-1 text-gray-500">스캐너</td><td className="py-1">{props.scanner_make} {props.scanner_model}</td></tr>}
+                        {props.software && <tr><td className="py-1 text-gray-500">소프트웨어</td><td className="py-1">{props.software}</td></tr>}
+                        {props.date_taken && <tr><td className="py-1 text-gray-500">촬영일</td><td className="py-1">{props.date_taken}</td></tr>}
+                        {props.format && <tr><td className="py-1 text-gray-500">포맷</td><td className="py-1">{props.format}</td></tr>}
+                        {props.duration_seconds && <tr><td className="py-1 text-gray-500">영상 길이</td><td className="py-1">{props.duration_seconds}초</td></tr>}
+                        {props.video_width && <tr><td className="py-1 text-gray-500">영상 크기</td><td className="py-1">{props.video_width} x {props.video_height}px</td></tr>}
+                        {f.is_archive && <tr><td className="py-1 text-gray-500">압축파일</td><td className="py-1 text-purple-700 font-medium">예</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ZIP archive tree */}
+                  {fileEntries.length > 0 && (
+                    <div className="mt-2 ml-2 p-3 bg-purple-50 rounded text-xs border border-purple-100">
+                      <p className="font-semibold text-purple-700 mb-2">ZIP 내부 구조 ({fileEntries.length}개 파일)</p>
+                      <div className="font-mono text-gray-600 space-y-0.5 max-h-48 overflow-y-auto">
+                        {fileEntries.slice(0, 20).map((e: any, i: number) => (
+                          <div key={i} className="flex justify-between">
+                            <span>{e.path}</span>
+                            <span className="text-gray-400 ml-4 shrink-0">{formatFileSize(e.size)} | {e.modified}</span>
+                          </div>
+                        ))}
+                        {fileEntries.length > 20 && (
+                          <div className="text-purple-500 mt-1">... 외 {fileEntries.length - 20}개</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
