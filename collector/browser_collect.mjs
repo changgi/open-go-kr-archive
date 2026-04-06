@@ -630,7 +630,7 @@ function extractDocExtra(text) {
 async function analyzeWithClaude(text, metadata) {
   if (!claude || !text || text.length < 20) return null;
   try {
-    const prompt = `당신은 대한민국 공공기관 공문서 분석 전문가입니다. 아래 공문서 내용을 분석하여 JSON으로 응답하세요.
+    const prompt = `당신은 대한민국 공공기관 공문서 분석 전문가입니다. 아래 공문서를 분석하여 JSON으로 응답하세요.
 
 ## 문서 메타데이터
 - 제목: ${metadata.info_sj || ''}
@@ -642,40 +642,56 @@ async function analyzeWithClaude(text, metadata) {
 ## 문서 본문
 ${text.slice(0, 3000)}
 
-## 분석 요청
+## 분석 규칙
 
-다음 JSON 형식으로 분석 결과를 반환하세요. JSON만 출력하고 다른 텍스트는 포함하지 마세요:
+1. **수신처 분석**: "수신내부결재"이면 doc_type="내부결재"이고, 이 경우 receiver에는 결재라인의 최종결재자(가장 높은 직급)의 직위와 이름을 명시하세요.
+2. **결재라인**: 본문 하단의 ★주무관 이후 나오는 직위-이름 쌍을 순서대로 추출하세요. "협조자" 이후 나오는 이름도 포함하세요.
+3. **6하원칙의 누구에게(to_whom)**: 내부결재인 경우 "내부결재권자 (직위1 이름1, 직위2 이름2, 최종결재직위 최종이름)" 형식으로 결재자 전원의 직위와 이름을 표시하세요.
+4. **one_line_summary**: 6하원칙 전체를 하나의 자연스러운 한국어 문장으로 요약하세요. 예: "충청남도교육청 안전수련원 총무부 주무관 이중목이 원장 류동훈에게, 신규 소집 사회복무요원 김태윤의 근무복 구입비 309,000원 지급을 요청하는 내부결재 문서이다."
+5. **주소**: 본문에서 우편번호(5자리) 뒤에 나오는 주소를 추출할 때, 줄바꿈으로 잘린 단어는 붙여쓰세요. 숫자 뒤에 바로 기관명이 이어지면 공백을 추가하세요 (예: "88-42충청남도" → "88-42 충청남도").
+
+## JSON 형식 (JSON만 출력)
 
 {
   "sender": {
-    "org": "발신 기관명 (상위 기관 포함)",
+    "org": "발신 기관명 (상위기관 포함 전체명)",
     "dept": "발신 부서명",
     "person": "담당자명",
     "role": "직위/직급"
   },
   "receiver": {
-    "org": "수신 기관명 (상위 기관 포함, 내부결재면 발신기관과 동일)",
-    "dept": "수신 부서명 (있으면)",
-    "person": "수신 담당자 (있으면)"
+    "org": "수신 기관명 (내부결재면 발신기관과 동일)",
+    "dept": "수신 부서명",
+    "person": "최종결재자 이름 (내부결재면 결재라인의 최고직급자)",
+    "role": "최종결재자 직위"
   },
   "doc_type": "내부결재 또는 외부발송",
   "summary_6w": {
-    "who": "누가 (발신자/기관)",
-    "to_whom": "누구에게 (수신자/기관)",
-    "when": "언제 (날짜/시기)",
+    "who": "누가 (발신 기관+부서+직위+이름)",
+    "to_whom": "누구에게 (내부결재: '내부결재권자 (직위1 이름1, 직위2 이름2, ...)' / 외부: 수신기관+부서)",
+    "when": "언제 (날짜)",
     "where": "어디서 (관련 장소/기관)",
-    "what": "무엇을 (핵심 행위/요청사항, 2~3문장)",
+    "what": "무엇을 (핵심 행위/요청사항, 구체적 금액/수량 포함, 2~3문장)",
     "why": "왜 (목적/배경/근거, 1~2문장)"
   },
-  "purpose": "이 문서의 핵심 목적을 한 문장으로",
+  "one_line_summary": "6하원칙을 자연스러운 한 문장으로 요약 (누가 누구에게 무엇을 왜 하는지)",
+  "purpose": "이 문서의 핵심 목적 한 문장",
   "action_required": "요청된 조치사항",
   "brm": {
-    "level1": "정책 대분류 (교육, 환경, 안전, 복지, 경제, 행정 등)",
+    "level1": "정책 대분류",
     "level2": "중분류",
     "level3": "소분류",
-    "level4": "세분류 (있으면)"
+    "level4": "세분류"
   },
-  "approval_chain": [{"role": "직위", "name": "이름"}]
+  "approval_chain": [{"role": "직위", "name": "이름"}],
+  "contact": {
+    "zip": "우편번호 5자리",
+    "address": "주소 (줄바꿈 복원, 숫자-기관명 사이 공백 추가)",
+    "phone": "전화번호",
+    "fax": "팩스번호",
+    "email": "이메일",
+    "url": "홈페이지 URL"
+  }
 }`;
 
     const response = await claude.messages.create({
@@ -1366,12 +1382,18 @@ try{
           return {
             sender_info: ai.sender ? JSON.stringify(ai.sender) : null,
             receiver_info: ai.receiver ? JSON.stringify(ai.receiver) : null,
-            ai_summary: ai.summary_6w ? JSON.stringify(ai.summary_6w) : null,
+            ai_summary: ai.summary_6w ? JSON.stringify({ ...ai.summary_6w, one_line: ai.one_line_summary || '' }) : null,
             brm_category: ai.brm ? JSON.stringify(ai.brm) : null,
-            // AI가 더 정확한 정보를 제공하면 기존 필드도 업데이트
             ...(ai.doc_type ? { doc_type: ai.doc_type } : {}),
-            ...(ai.receiver?.org ? { recipient: ai.receiver.org + (ai.receiver.dept ? ' ' + ai.receiver.dept : '') } : {}),
+            // 수신처: 내부결재면 최종결재자 포함
+            ...(ai.receiver ? {
+              recipient: ai.doc_type === '내부결재'
+                ? `${ai.receiver.role || ''} ${ai.receiver.person || ''}`.trim() + (ai.receiver.org ? ` (${ai.receiver.org})` : '')
+                : (ai.receiver.org || '') + (ai.receiver.dept ? ' ' + ai.receiver.dept : '')
+            } : {}),
             ...(ai.approval_chain?.length > 0 ? { approval_chain: JSON.stringify(ai.approval_chain) } : {}),
+            // AI가 추출한 연락처가 더 정확하면 사용
+            ...(ai.contact ? { contact_info: JSON.stringify(ai.contact) } : {}),
           };
         })()),
       });

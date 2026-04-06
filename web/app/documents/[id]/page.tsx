@@ -115,7 +115,12 @@ export default async function DocumentDetailPage({ params }: Props) {
                   <p className="text-xs text-green-600 font-semibold mb-1">수신 (To)</p>
                   <p className="text-sm font-medium text-gray-900">{receiver.org || d.recipient || (d.doc_type === '내부결재' ? (d.proc_instt_nm || '내부결재') : '-')}</p>
                   {receiver.dept && <p className="text-xs text-gray-600">{receiver.dept}</p>}
-                  {receiver.person && <p className="text-xs text-gray-500">{receiver.person}</p>}
+                  {(receiver.person || receiver.role) && (
+                    <p className="text-xs text-gray-500 font-medium">
+                      {receiver.role ? `${receiver.role} ` : ''}{receiver.person}
+                      {d.doc_type === '내부결재' && <span className="ml-1 text-green-600">(최종결재자)</span>}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -153,6 +158,12 @@ export default async function DocumentDetailPage({ params }: Props) {
                       {w.why && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">왜</td><td className="px-3 py-2">{w.why}</td></tr>}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {/* 한줄 요약 */}
+              {w.one_line && (
+                <div className="px-3 py-2.5 bg-amber-100/60 rounded-lg border border-amber-200 text-sm text-gray-800 leading-relaxed">
+                  {w.one_line}
                 </div>
               )}
               {/* 핵심 내용 */}
