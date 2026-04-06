@@ -163,7 +163,7 @@ export default async function DocumentDetailPage({ params }: Props) {
             </div>
           </div>
         );
-      })()
+      })()}
 
       {/* 키워드 */}
       {d.keywords && (
