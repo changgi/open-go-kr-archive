@@ -434,7 +434,12 @@ function generateSummary(text, title, metadata) {
   // ── 8. 연락처 정보 추출 ──
   const 연락처 = {};
   const addrMatch = cleaned.match(/우(\d{5})\s*([^\n/]+)/);
-  if (addrMatch) { 연락처.우편번호 = addrMatch[1]; 연락처.주소 = addrMatch[2].trim(); }
+  if (addrMatch) {
+    연락처.우편번호 = addrMatch[1];
+    연락처.주소 = addrMatch[2].trim().replace(/(\S)\s{1}(\S{1,3})(?=\s|$)/g, (_, a, b) =>
+      /[가-힣]/.test(a) && /[가-힣]/.test(b) ? a + b : _
+    );
+  }
   const phoneMatch = cleaned.match(/전화\s*([\d-]+)/);
   if (phoneMatch) 연락처.전화 = phoneMatch[1];
   const faxMatch = cleaned.match(/전송\s*([\d-]+)/);
@@ -597,7 +602,17 @@ function extractDocExtra(text) {
   // 연락처
   const contact = {};
   const m1 = cleaned.match(/우(\d{5})\s*([^/\n]+)/);
-  if (m1) { contact.zip = m1[1]; contact.address = m1[2].trim(); }
+  if (m1) {
+    contact.zip = m1[1];
+    // 주소에서 줄바꿈으로 잘린 단어 복원 (예: "안전수 련원" → "안전수련원")
+    contact.address = m1[2].trim()
+      .replace(/(\S)\s{1}(\S{1,3})(?=\s|$)/g, (_, a, b) => {
+        // 한글 음절 중간에 공백이 들어간 경우 복원
+        if (/[가-힣]/.test(a) && /[가-힣]/.test(b)) return a + b;
+        return _ ;
+      })
+      .replace(/\)\s*$/, ')');
+  }
   const m2 = cleaned.match(/전화\s*([\d-]+)/);
   if (m2) contact.phone = m2[1];
   const m3 = cleaned.match(/전송\s*([\d-]+)/);

@@ -123,24 +123,46 @@ export default async function DocumentDetailPage({ params }: Props) {
         );
       })()}
 
-      {/* AI 6하원칙 요약 */}
-      {d.ai_summary && (() => {
+      {/* 문서 내용 요약 (AI 6하원칙 + 핵심내용 통합) */}
+      {(d.ai_summary || d.body_summary) && (() => {
         let w: any = {};
         try { w = typeof d.ai_summary === 'string' ? JSON.parse(d.ai_summary) : (d.ai_summary || {}); } catch {}
-        if (!w.who && !w.what) return null;
+
+        // body_summary에서 핵심내용 추출
+        let coreContent = '';
+        if (d.body_summary) {
+          const match = d.body_summary.match(/## 핵심 내용\n\n([\s\S]*?)(?=\n## |$)/);
+          if (match) coreContent = match[1].trim();
+        }
+
         return (
           <div className="bg-white rounded-lg shadow-sm border border-amber-200 overflow-hidden">
-            <h2 className="px-4 py-3 bg-amber-50 font-semibold text-sm text-amber-800 border-b border-amber-100">AI 6하원칙 분석</h2>
-            <table className="w-full text-sm">
-              <tbody>
-                {w.who && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">누가 (Who)</td><td className="px-4 py-2.5">{w.who}</td></tr>}
-                {w.to_whom && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">누구에게</td><td className="px-4 py-2.5">{w.to_whom}</td></tr>}
-                {w.when && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">언제 (When)</td><td className="px-4 py-2.5">{w.when}</td></tr>}
-                {w.where && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">어디서 (Where)</td><td className="px-4 py-2.5">{w.where}</td></tr>}
-                {w.what && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">무엇을 (What)</td><td className="px-4 py-2.5">{w.what}</td></tr>}
-                {w.why && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">왜 (Why)</td><td className="px-4 py-2.5">{w.why}</td></tr>}
-              </tbody>
-            </table>
+            <h2 className="px-4 py-3 bg-amber-50 font-semibold text-sm text-amber-800 border-b border-amber-100">문서 내용 요약</h2>
+            <div className="p-4 space-y-4">
+              {/* 6하원칙 테이블 */}
+              {(w.who || w.what) && (
+                <div>
+                  <h3 className="text-xs font-semibold text-amber-700 mb-2">6하원칙 분석</h3>
+                  <table className="w-full text-sm border border-amber-100 rounded">
+                    <tbody>
+                      {w.who && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">누가</td><td className="px-3 py-2">{w.who}</td></tr>}
+                      {w.to_whom && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">누구에게</td><td className="px-3 py-2">{w.to_whom}</td></tr>}
+                      {w.when && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">언제</td><td className="px-3 py-2">{w.when}</td></tr>}
+                      {w.where && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">어디서</td><td className="px-3 py-2">{w.where}</td></tr>}
+                      {w.what && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">무엇을</td><td className="px-3 py-2">{w.what}</td></tr>}
+                      {w.why && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">왜</td><td className="px-3 py-2">{w.why}</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {/* 핵심 내용 */}
+              {coreContent && (
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-700 mb-2">핵심 내용</h3>
+                  <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-gray-50 rounded p-3">{coreContent}</div>
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
@@ -212,15 +234,7 @@ export default async function DocumentDetailPage({ params }: Props) {
         </div>
       )}
 
-      {/* 본문 요약 */}
-      {d.body_summary && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <h2 className="px-4 py-3 bg-amber-50 font-semibold text-sm text-amber-800 border-b border-amber-100">문서 내용 요약</h2>
-          <div className="px-4 py-3 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-            {d.body_summary.replace(/^## 문서 개요\n\n/, '').replace(/\n## /g, '\n\n## ')}
-          </div>
-        </div>
-      )}
+      {/* 본문 요약은 위 '문서 내용 요약' 섹션에 통합됨 */}
 
       {/* 파일 목록 */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
