@@ -128,14 +128,17 @@ export default async function DocumentDetailPage({ params }: Props) {
         );
       })()}
 
-      {/* 문서 내용 요약 (AI 6하원칙 + 핵심내용 통합) */}
-      {(d.ai_summary || d.body_summary) && (() => {
+      {/* 문서 내용 요약 — 6하원칙, 한줄요약, 핵심내용 각각 별도 참조 가능 */}
+      {(d.six_w_analysis || d.ai_summary || d.one_line_summary || d.core_content || d.body_summary) && (() => {
         let w: any = {};
-        try { w = typeof d.ai_summary === 'string' ? JSON.parse(d.ai_summary) : (d.ai_summary || {}); } catch {}
+        try { w = typeof d.six_w_analysis === 'string' ? JSON.parse(d.six_w_analysis) : (d.six_w_analysis || {}); } catch {}
+        if (!w.who && d.ai_summary) {
+          try { w = typeof d.ai_summary === 'string' ? JSON.parse(d.ai_summary) : (d.ai_summary || {}); } catch {}
+        }
 
-        // body_summary에서 핵심내용 추출
-        let coreContent = '';
-        if (d.body_summary) {
+        // core_content (DB) 또는 body_summary에서 추출
+        let coreContent = d.core_content || '';
+        if (!coreContent && d.body_summary) {
           const match = d.body_summary.match(/## 핵심 내용\n\n([\s\S]*?)(?=\n## |$)/);
           if (match) coreContent = match[1].trim();
         }
@@ -144,34 +147,43 @@ export default async function DocumentDetailPage({ params }: Props) {
           <div className="bg-white rounded-lg shadow-sm border border-amber-200 overflow-hidden">
             <h2 className="px-4 py-3 bg-amber-50 font-semibold text-sm text-amber-800 border-b border-amber-100">문서 내용 요약</h2>
             <div className="p-4 space-y-4">
-              {/* 6하원칙 테이블 */}
+
+              {/* 6하원칙 분석 */}
               {(w.who || w.what) && (
-                <div>
-                  <h3 className="text-xs font-semibold text-amber-700 mb-2">6하원칙 분석</h3>
-                  <table className="w-full text-sm border border-amber-100 rounded">
+                <div className="bg-white rounded-lg border border-amber-100 overflow-hidden">
+                  <div className="px-3 py-2 bg-amber-50/80 border-b border-amber-100 flex items-center gap-2">
+                    <span className="text-xs font-bold text-white px-1.5 py-0.5 bg-amber-600 rounded">6하원칙</span>
+                    <span className="text-xs text-amber-700">누가, 누구에게, 언제, 어디서, 무엇을, 왜</span>
+                  </div>
+                  <table className="w-full text-sm">
                     <tbody>
-                      {w.who && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">누가</td><td className="px-3 py-2">{w.who}</td></tr>}
-                      {w.to_whom && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">누구에게</td><td className="px-3 py-2">{w.to_whom}</td></tr>}
-                      {w.when && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">언제</td><td className="px-3 py-2">{w.when}</td></tr>}
-                      {w.where && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">어디서</td><td className="px-3 py-2">{w.where}</td></tr>}
-                      {w.what && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">무엇을</td><td className="px-3 py-2">{w.what}</td></tr>}
-                      {w.why && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/50 w-28">왜</td><td className="px-3 py-2">{w.why}</td></tr>}
+                      {w.who && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">누가</td><td className="px-3 py-2">{w.who}</td></tr>}
+                      {w.to_whom && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">누구에게</td><td className="px-3 py-2">{w.to_whom}</td></tr>}
+                      {w.when && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">언제</td><td className="px-3 py-2">{w.when}</td></tr>}
+                      {w.where && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">어디서</td><td className="px-3 py-2">{w.where}</td></tr>}
+                      {w.what && <tr className="border-b border-amber-50"><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">무엇을</td><td className="px-3 py-2">{w.what}</td></tr>}
+                      {w.why && <tr><td className="px-3 py-2 font-medium text-amber-700 bg-amber-50/30 w-28">왜</td><td className="px-3 py-2">{w.why}</td></tr>}
                     </tbody>
                   </table>
                 </div>
               )}
+
               {/* 한줄요약 */}
               {d.one_line_summary && (
-                <div className="bg-amber-100/70 rounded-lg border border-amber-200 p-3">
-                  <span className="text-xs font-bold text-amber-800 mr-2 px-1.5 py-0.5 bg-amber-200 rounded">한줄요약</span>
+                <div className="bg-amber-100/60 rounded-lg border border-amber-200 p-3 flex items-start gap-2">
+                  <span className="text-xs font-bold text-white px-1.5 py-0.5 bg-amber-600 rounded shrink-0 mt-0.5">한줄요약</span>
                   <span className="text-sm text-gray-900 leading-relaxed">{d.one_line_summary}</span>
                 </div>
               )}
-              {/* 핵심 내용 */}
+
+              {/* 핵심내용 */}
               {coreContent && (
-                <div>
-                  <h3 className="text-xs font-semibold text-gray-700 mb-2">핵심 내용</h3>
-                  <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap bg-gray-50 rounded p-3">{coreContent}</div>
+                <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-3 py-2 bg-gray-100 border-b border-gray-200 flex items-center gap-2">
+                    <span className="text-xs font-bold text-white px-1.5 py-0.5 bg-gray-600 rounded">핵심내용</span>
+                    <span className="text-xs text-gray-500">문서의 주요 내용 및 요청사항</span>
+                  </div>
+                  <div className="p-3 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{coreContent}</div>
                 </div>
               )}
             </div>
