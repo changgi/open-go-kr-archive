@@ -15,11 +15,14 @@
 
 import { execFileSync } from 'child_process';
 import { createRequire } from 'module';
+import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
+const anthropicKey = process.env.ANTHROPIC_API_KEY;
+const claude = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.join(__dirname, 'cheliped-browser', 'scripts', 'cheliped-cli.mjs');
@@ -486,11 +489,56 @@ function generateSummary(text, title, metadata) {
 }
 
 // Generate content markdown file
-function generateContentMd(fileName, text, summary) {
+function generateContentMd(fileName, text, summary, aiAnalysis) {
   let md = `# ${fileName} 내용\n\n`;
-  if (summary) {
+
+  // AI 분석 결과 (있으면 우선 표시)
+  if (aiAnalysis) {
+    md += `## AI 문서 분석\n\n`;
+    md += `### 문서 목적\n\n${aiAnalysis.purpose || '-'}\n\n`;
+
+    if (aiAnalysis.summary_6w) {
+      const w = aiAnalysis.summary_6w;
+      md += `### 6하원칙 요약\n\n`;
+      md += `| 구분 | 내용 |\n|------|------|\n`;
+      md += `| 누가 (Who) | ${w.who || '-'} |\n`;
+      md += `| 누구에게 (To Whom) | ${w.to_whom || '-'} |\n`;
+      md += `| 언제 (When) | ${w.when || '-'} |\n`;
+      md += `| 어디서 (Where) | ${w.where || '-'} |\n`;
+      md += `| 무엇을 (What) | ${w.what || '-'} |\n`;
+      md += `| 왜 (Why) | ${w.why || '-'} |\n\n`;
+    }
+
+    if (aiAnalysis.sender) {
+      md += `### 발신/수신\n\n`;
+      md += `| 구분 | 기관 | 부서 | 담당자 |\n|------|------|------|--------|\n`;
+      md += `| 발신 | ${aiAnalysis.sender.org || '-'} | ${aiAnalysis.sender.dept || '-'} | ${aiAnalysis.sender.person || '-'} |\n`;
+      md += `| 수신 | ${aiAnalysis.receiver?.org || '-'} | ${aiAnalysis.receiver?.dept || '-'} | ${aiAnalysis.receiver?.person || '-'} |\n\n`;
+    }
+
+    if (aiAnalysis.action_required) {
+      md += `### 요청 조치사항\n\n${aiAnalysis.action_required}\n\n`;
+    }
+
+    if (aiAnalysis.brm) {
+      const b = aiAnalysis.brm;
+      md += `### BRM 분류체계\n\n`;
+      md += `${b.level1 || ''} > ${b.level2 || ''} > ${b.level3 || ''}${b.level4 ? ' > ' + b.level4 : ''}\n\n`;
+    }
+
+    if (aiAnalysis.approval_chain?.length > 0) {
+      md += `### 결재라인\n\n`;
+      md += `| 직위 | 이름 |\n|------|------|\n`;
+      aiAnalysis.approval_chain.forEach(a => { md += `| ${a.role} | ${a.name} |\n`; });
+      md += `\n`;
+    }
+  }
+
+  // 기존 요약 (AI 없을 때 fallback)
+  if (summary && !aiAnalysis) {
     md += `## 요약\n\n${summary}\n\n`;
   }
+
   md += `## 전체 내용\n\n`;
   md += '```\n' + text.slice(0, 100000) + '\n```\n';
   if (text.length > 100000) {
@@ -546,6 +594,76 @@ function extractDocExtra(text) {
   if (Object.keys(contact).length > 0) extra.contact_info = contact;
 
   return extra;
+}
+
+// ── Claude API 문서 분석 ──
+async function analyzeWithClaude(text, metadata) {
+  if (!claude || !text || text.length < 20) return null;
+  try {
+    const prompt = `당신은 대한민국 공공기관 공문서 분석 전문가입니다. 아래 공문서 내용을 분석하여 JSON으로 응답하세요.
+
+## 문서 메타데이터
+- 제목: ${metadata.info_sj || ''}
+- 기관명: ${metadata.proc_instt_nm || ''}
+- 담당부서: ${metadata.chrg_dept_nm || ''}
+- 담당자: ${metadata.charger_nm || ''}
+- 생산일자: ${metadata.prdctn_dt || ''}
+
+## 문서 본문
+${text.slice(0, 3000)}
+
+## 분석 요청
+
+다음 JSON 형식으로 분석 결과를 반환하세요. JSON만 출력하고 다른 텍스트는 포함하지 마세요:
+
+{
+  "sender": {
+    "org": "발신 기관명 (상위 기관 포함)",
+    "dept": "발신 부서명",
+    "person": "담당자명",
+    "role": "직위/직급"
+  },
+  "receiver": {
+    "org": "수신 기관명 (상위 기관 포함, 내부결재면 발신기관과 동일)",
+    "dept": "수신 부서명 (있으면)",
+    "person": "수신 담당자 (있으면)"
+  },
+  "doc_type": "내부결재 또는 외부발송",
+  "summary_6w": {
+    "who": "누가 (발신자/기관)",
+    "to_whom": "누구에게 (수신자/기관)",
+    "when": "언제 (날짜/시기)",
+    "where": "어디서 (관련 장소/기관)",
+    "what": "무엇을 (핵심 행위/요청사항, 2~3문장)",
+    "why": "왜 (목적/배경/근거, 1~2문장)"
+  },
+  "purpose": "이 문서의 핵심 목적을 한 문장으로",
+  "action_required": "요청된 조치사항",
+  "brm": {
+    "level1": "정책 대분류 (교육, 환경, 안전, 복지, 경제, 행정 등)",
+    "level2": "중분류",
+    "level3": "소분류",
+    "level4": "세분류 (있으면)"
+  },
+  "approval_chain": [{"role": "직위", "name": "이름"}]
+}`;
+
+    const response = await claude.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1500,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const content = response.content[0]?.text || '';
+    // Extract JSON from response
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0]);
+    }
+  } catch (e) {
+    tlog(`    → Claude 분석 실패: ${e.message?.slice(0, 80)}`);
+  }
+  return null;
 }
 
 // Upload file to Supabase Storage and return public URL
@@ -1052,10 +1170,23 @@ try{
               // 본문(결재문서)에서 추가 메타데이터 추출 → 문서 레코드에 저장
               if (f.fileSeDc === '본문') {
                 f._docExtra = extractDocExtra(f._content);
+
+                // Claude API로 심층 분석
+                if (claude) {
+                  tlog(`    → Claude API 분석 중...`);
+                  const aiResult = await analyzeWithClaude(f._content, {
+                    info_sj: title, proc_instt_nm: insttNm,
+                    chrg_dept_nm: detailDeptNm, charger_nm: chargerNm, prdctn_dt: pDate,
+                  });
+                  if (aiResult) {
+                    f._aiAnalysis = aiResult;
+                    tlog(`    → Claude 분석 완료: ${aiResult.purpose?.slice(0, 50) || ''} (${elapsed(docStart)})`);
+                  }
+                }
               }
 
-              // MD 파일로 저장
-              const contentMd = generateContentMd(f.fileNm, f._content, f._summary);
+              // MD 파일로 저장 (AI 분석 결과 포함)
+              const contentMd = generateContentMd(f.fileNm, f._content, f._summary, f._aiAnalysis);
               const contentFname = sanitize(`${f.fileSeDc || '기타'}_${f.fileNm}_내용`, 200) + '.md';
               fs.writeFileSync(path.join(folderPath, contentFname), contentMd, 'utf8');
               tlog(`    → 내용: ${f._content.length.toLocaleString()}자 추출 (${elapsed(docStart)})`);
@@ -1197,6 +1328,22 @@ try{
         downloaded_count: downloadCount,
         body_summary: (fileList.find(f => f.fileSeDc === '본문' && f._summary) || {})?._summary || null,
         original_url: detailUrl,
+        // AI 분석 결과
+        ...((() => {
+          const bodyFile = fileList.find(f => f.fileSeDc === '본문' && f._aiAnalysis);
+          if (!bodyFile?._aiAnalysis) return {};
+          const ai = bodyFile._aiAnalysis;
+          return {
+            sender_info: ai.sender ? JSON.stringify(ai.sender) : null,
+            receiver_info: ai.receiver ? JSON.stringify(ai.receiver) : null,
+            ai_summary: ai.summary_6w ? JSON.stringify(ai.summary_6w) : null,
+            brm_category: ai.brm ? JSON.stringify(ai.brm) : null,
+            // AI가 더 정확한 정보를 제공하면 기존 필드도 업데이트
+            ...(ai.doc_type ? { doc_type: ai.doc_type } : {}),
+            ...(ai.receiver?.org ? { recipient: ai.receiver.org + (ai.receiver.dept ? ' ' + ai.receiver.dept : '') } : {}),
+            ...(ai.approval_chain?.length > 0 ? { approval_chain: JSON.stringify(ai.approval_chain) } : {}),
+          };
+        })()),
       });
 
       // Step F: Supabase sync - files

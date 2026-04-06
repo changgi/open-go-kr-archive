@@ -87,18 +87,83 @@ export default async function DocumentDetailPage({ params }: Props) {
         </table>
       </div>
 
-      {/* 문서유형 + 수신처 */}
-      {(d.doc_type || d.recipient) && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <h2 className="px-4 py-3 bg-gray-50 font-semibold text-sm text-gray-700 border-b">발송 정보</h2>
-          <table className="w-full text-sm">
-            <tbody>
-              {d.doc_type && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-gray-600 bg-gray-50 w-36">문서유형</td><td className="px-4 py-2.5">{d.doc_type}</td></tr>}
-              {d.recipient && d.recipient !== '내부결재' && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-gray-600 bg-gray-50 w-36">수신처</td><td className="px-4 py-2.5">{d.recipient}</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* 발신/수신처 */}
+      {(d.sender_info || d.receiver_info || d.doc_type) && (() => {
+        let sender: any = {};
+        let receiver: any = {};
+        try { sender = typeof d.sender_info === 'string' ? JSON.parse(d.sender_info) : (d.sender_info || {}); } catch {}
+        try { receiver = typeof d.receiver_info === 'string' ? JSON.parse(d.receiver_info) : (d.receiver_info || {}); } catch {}
+        const hasSender = sender.org || d.proc_instt_nm;
+        return (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <h2 className="px-4 py-3 bg-gray-50 font-semibold text-sm text-gray-700 border-b">
+              발신 / 수신 {d.doc_type && <span className={`ml-2 text-xs px-2 py-0.5 rounded ${d.doc_type === '내부결재' ? 'bg-gray-200' : 'bg-blue-100 text-blue-700'}`}>{d.doc_type}</span>}
+            </h2>
+            <div className="p-4">
+              <div className="flex items-center gap-4">
+                {/* 발신 */}
+                <div className="flex-1 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                  <p className="text-xs text-blue-600 font-semibold mb-1">발신 (From)</p>
+                  <p className="text-sm font-medium text-gray-900">{sender.org || d.proc_instt_nm || '-'}</p>
+                  {sender.dept && <p className="text-xs text-gray-600">{sender.dept}</p>}
+                  {sender.person && <p className="text-xs text-gray-500">{sender.role ? `${sender.role} ` : ''}{sender.person}</p>}
+                </div>
+                {/* 화살표 */}
+                <span className="text-2xl text-gray-300 shrink-0">→</span>
+                {/* 수신 */}
+                <div className="flex-1 p-3 bg-green-50 rounded-lg border border-green-100">
+                  <p className="text-xs text-green-600 font-semibold mb-1">수신 (To)</p>
+                  <p className="text-sm font-medium text-gray-900">{receiver.org || d.recipient || (d.doc_type === '내부결재' ? (d.proc_instt_nm || '내부결재') : '-')}</p>
+                  {receiver.dept && <p className="text-xs text-gray-600">{receiver.dept}</p>}
+                  {receiver.person && <p className="text-xs text-gray-500">{receiver.person}</p>}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* AI 6하원칙 요약 */}
+      {d.ai_summary && (() => {
+        let w: any = {};
+        try { w = typeof d.ai_summary === 'string' ? JSON.parse(d.ai_summary) : (d.ai_summary || {}); } catch {}
+        if (!w.who && !w.what) return null;
+        return (
+          <div className="bg-white rounded-lg shadow-sm border border-amber-200 overflow-hidden">
+            <h2 className="px-4 py-3 bg-amber-50 font-semibold text-sm text-amber-800 border-b border-amber-100">AI 6하원칙 분석</h2>
+            <table className="w-full text-sm">
+              <tbody>
+                {w.who && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">누가 (Who)</td><td className="px-4 py-2.5">{w.who}</td></tr>}
+                {w.to_whom && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">누구에게</td><td className="px-4 py-2.5">{w.to_whom}</td></tr>}
+                {w.when && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">언제 (When)</td><td className="px-4 py-2.5">{w.when}</td></tr>}
+                {w.where && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">어디서 (Where)</td><td className="px-4 py-2.5">{w.where}</td></tr>}
+                {w.what && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">무엇을 (What)</td><td className="px-4 py-2.5">{w.what}</td></tr>}
+                {w.why && <tr className="border-b"><td className="px-4 py-2.5 font-medium text-amber-700 bg-amber-50 w-36">왜 (Why)</td><td className="px-4 py-2.5">{w.why}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+
+      {/* BRM 분류체계 */}
+      {d.brm_category && (() => {
+        let brm: any = {};
+        try { brm = typeof d.brm_category === 'string' ? JSON.parse(d.brm_category) : (d.brm_category || {}); } catch {}
+        if (!brm.level1) return null;
+        return (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <h2 className="font-semibold text-sm text-gray-700 mb-2">BRM 정책분류체계</h2>
+            <div className="flex items-center gap-2 text-sm">
+              {[brm.level1, brm.level2, brm.level3, brm.level4].filter(Boolean).map((level: string, i: number) => (
+                <span key={i} className="flex items-center gap-2">
+                  {i > 0 && <span className="text-gray-300">›</span>}
+                  <span className={`px-2 py-1 rounded ${i === 0 ? 'bg-primary-100 text-primary-700 font-medium' : 'bg-gray-100 text-gray-600'}`}>{level}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })()
 
       {/* 키워드 */}
       {d.keywords && (
