@@ -56,3 +56,4 @@ collector/public_test/
 collector/final_test/
 collector/summary_test/
 collector/final_summary/
+collector/complete_test/

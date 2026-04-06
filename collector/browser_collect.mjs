@@ -832,6 +832,8 @@ async function main() {
       const insttCd = doc.INSTT_CD || '';
       const insttSeCd = doc.INSTT_SE_CD || '';
       const fileNm = htmlDecode(doc.FILE_NM || '');
+      const keywords = (doc.tma_kwd || '').replace(/\n/g, ', ').trim();
+      const fullDeptNm = htmlDecode(doc.NFLST_CHRG_DEPT_NM || '');
 
       const folderName = `${collected}_${sanitize(title)}`;
       const folderPath = path.join(opts.outputDir, folderName);
@@ -947,6 +949,8 @@ var tries=0;var iv=setInterval(function(){tries++;
       md += `| 분류체계 | ${fullNstClNm} |\n`;
       md += `| 원문등록번호 | ${regNo} |\n`;
       md += `| 기관코드 | ${insttCd} |\n`;
+      if (fullDeptNm) md += `| 소속 전체명 | ${fullDeptNm} |\n`;
+      if (keywords) md += `| 키워드 | ${keywords} |\n`;
 
       md += `\n## 파일 목록 (${fileList.length}개)\n\n`;
       if (fileList.length > 0) {
@@ -1186,6 +1190,13 @@ try{
             contact_info: ex.contact_info ? JSON.stringify(ex.contact_info) : null,
           };
         })()),
+        // 추가 메타데이터
+        keywords: keywords || null,
+        full_dept_nm: fullDeptNm || null,
+        file_count: fileList.length,
+        downloaded_count: downloadCount,
+        body_summary: (fileList.find(f => f.fileSeDc === '본문' && f._summary) || {})?._summary || null,
+        original_url: detailUrl,
       });
 
       // Step F: Supabase sync - files
