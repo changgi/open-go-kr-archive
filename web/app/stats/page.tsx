@@ -15,7 +15,7 @@ export default async function StatsPage() {
   const { data: insttData } = await supabase
     .from("documents")
     .select("proc_instt_nm")
-    .not("proc_instt_nm", "is", null);
+    .limit(1000);
 
   const insttCounts: Record<string, number> = {};
   (insttData || []).forEach((d: { proc_instt_nm: string | null }) => {
