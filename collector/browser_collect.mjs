@@ -1383,7 +1383,8 @@ try{
           return {
             sender_info: ai.sender ? JSON.stringify(ai.sender) : null,
             receiver_info: ai.receiver ? JSON.stringify(ai.receiver) : null,
-            ai_summary: ai.summary_6w ? JSON.stringify({ ...ai.summary_6w, one_line: ai.one_line_summary || '' }) : null,
+            ai_summary: ai.summary_6w ? JSON.stringify(ai.summary_6w) : null,
+            one_line_summary: ai.one_line_summary || null,
             brm_category: ai.brm ? JSON.stringify(ai.brm) : null,
             ...(ai.doc_type ? { doc_type: ai.doc_type } : {}),
             // 수신처: 내부결재면 최종결재자 포함

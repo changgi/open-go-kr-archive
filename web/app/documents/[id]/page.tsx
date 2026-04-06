@@ -160,10 +160,11 @@ export default async function DocumentDetailPage({ params }: Props) {
                   </table>
                 </div>
               )}
-              {/* 한줄 요약 */}
-              {w.one_line && (
-                <div className="px-3 py-2.5 bg-amber-100/60 rounded-lg border border-amber-200 text-sm text-gray-800 leading-relaxed">
-                  {w.one_line}
+              {/* 한줄요약 */}
+              {d.one_line_summary && (
+                <div className="bg-amber-100/70 rounded-lg border border-amber-200 p-3">
+                  <span className="text-xs font-bold text-amber-800 mr-2 px-1.5 py-0.5 bg-amber-200 rounded">한줄요약</span>
+                  <span className="text-sm text-gray-900 leading-relaxed">{d.one_line_summary}</span>
                 </div>
               )}
               {/* 핵심 내용 */}

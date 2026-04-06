@@ -36,6 +36,9 @@ export default function DocumentCard({ doc }: { doc: any }) {
         {doc.doc_no && <span>#{doc.doc_no}</span>}
         {doc.file_count > 0 && <span>파일 {doc.file_count}개</span>}
       </div>
+      {doc.one_line_summary && (
+        <p className="mt-1.5 text-xs text-gray-600 line-clamp-2 leading-relaxed">{doc.one_line_summary}</p>
+      )}
       {doc.keywords && (
         <div className="mt-1.5 flex flex-wrap gap-1">
           {doc.keywords.split(',').slice(0, 3).map((kw: string, i: number) => kw.trim() && (
