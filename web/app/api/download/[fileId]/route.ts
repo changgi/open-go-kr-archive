@@ -16,11 +16,11 @@ export async function GET(
     .single();
 
   if (error || !file) {
-    return NextResponse.json({ error: "File not found" }, { status: 404 });
+    return NextResponse.json({ error: "File not found", detail: error?.message, fileId: params.fileId }, { status: 404 });
   }
 
   if (!file.file_data) {
-    return NextResponse.json({ error: "File data not available" }, { status: 404 });
+    return NextResponse.json({ error: "File data not available", fileId: params.fileId, hasFile: !!file, hasData: !!file?.file_data, fileName: file?.file_nm }, { status: 404 });
   }
 
   const buffer = Buffer.from(file.file_data, "base64");
