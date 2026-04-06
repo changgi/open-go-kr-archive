@@ -15,16 +15,31 @@
 
 import { execFileSync } from 'child_process';
 import { createRequire } from 'module';
+import { config as dotenvConfig } from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// .env 파일 로드
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    fs.readFileSync(envPath, 'utf8').replace(/\r/g, '').split('\n').forEach(line => {
+      const idx = line.indexOf('=');
+      if (idx > 0 && !line.startsWith('#')) {
+        const key = line.slice(0, idx).trim();
+        const val = line.slice(idx + 1).trim();
+        if (key && val && !process.env[key]) process.env[key] = val;
+      }
+    });
+  }
+} catch {}
+
 const require = createRequire(import.meta.url);
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 const claude = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.join(__dirname, 'cheliped-browser', 'scripts', 'cheliped-cli.mjs');
 const CWD = path.join(__dirname, 'cheliped-browser', 'scripts');
 const BASE_URL = 'https://www.open.go.kr';

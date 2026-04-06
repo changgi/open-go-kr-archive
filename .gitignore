@@ -58,3 +58,5 @@ collector/summary_test/
 collector/final_summary/
 collector/complete_test/
 collector/ai_test/
+collector/ai_final/
+collector/.env
