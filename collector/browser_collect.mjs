@@ -974,7 +974,8 @@ async function main() {
   fs.mkdirSync(opts.outputDir, { recursive: true });
   const csvPath = path.join(opts.outputDir, 'collection_log.csv');
   if (!fs.existsSync(csvPath)) {
-    fs.writeFileSync(csvPath, '번호,원문등록번호,제목,처리시각,상태,다운로드,공개구분,기관명,소요시간,비고\n', 'utf8');
+    // UTF-8 BOM + 헤더 (Excel 한글 호환)
+    fs.writeFileSync(csvPath, '\uFEFF번호,원문등록번호,제목,처리시각,상태,다운로드,공개구분,기관명,소요시간,비고\n', 'utf8');
   }
 
   // 증분수집: 이미 수집된 문서 로드
