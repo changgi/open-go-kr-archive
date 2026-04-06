@@ -57,6 +57,7 @@ function parseArgs() {
   const opts = {
     keyword: '', startDate: fmt(ago), endDate: fmt(today),
     maxCount: 10, outputDir: './open_go_kr_docs', oppSeCd: '',
+    skipFiles: false,
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -66,6 +67,7 @@ function parseArgs() {
     else if (a === '-n' || a === '--max-count') opts.maxCount = parseInt(args[++i]);
     else if (a === '-o' || a === '--output-dir') opts.outputDir = args[++i];
     else if (a === '--opp-se-cd') opts.oppSeCd = args[++i];
+    else if (a === '--skip-files') opts.skipFiles = true;
   }
   return opts;
 }
@@ -907,6 +909,60 @@ async function syncToSupabase(doc) {
   }
 }
 
+// ── 증분수집: 이미 수집된 문서 목록 로드 ──
+async function loadCollectedSet(outputDir) {
+  const collected = new Set();
+
+  // 1. 로컬 CSV에서 로드
+  const csvPath = path.join(outputDir, 'collection_log.csv');
+  if (fs.existsSync(csvPath)) {
+    const lines = fs.readFileSync(csvPath, 'utf8').split('\n').slice(1);
+    for (const line of lines) {
+      const match = line.match(/^\d+,([^,]+),/);
+      if (match) collected.add(match[1]);
+    }
+  }
+
+  // 2. Supabase DB에서 로드
+  if (supabaseUrl && supabaseKey) {
+    try {
+      let offset = 0;
+      while (true) {
+        const res = await fetch(`${supabaseUrl}/rest/v1/documents?select=prdctn_instt_regist_no&limit=1000&offset=${offset}`, {
+          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` },
+        });
+        if (!res.ok) break;
+        const rows = await res.json();
+        if (rows.length === 0) break;
+        for (const r of rows) {
+          if (r.prdctn_instt_regist_no) collected.add(r.prdctn_instt_regist_no);
+        }
+        offset += 1000;
+        if (rows.length < 1000) break;
+      }
+    } catch {}
+  }
+
+  return collected;
+}
+
+// ── 증분수집 상태 저장/로드 ──
+function getStatePath(outputDir) { return path.join(outputDir, '.collect_state.json'); }
+
+function loadState(outputDir) {
+  try {
+    const statePath = getStatePath(outputDir);
+    if (fs.existsSync(statePath)) {
+      return JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    }
+  } catch {}
+  return null;
+}
+
+function saveState(outputDir, state) {
+  fs.writeFileSync(getStatePath(outputDir), JSON.stringify(state, null, 2), 'utf8');
+}
+
 // ── Main ──
 async function main() {
   const opts = parseArgs();
@@ -921,10 +977,23 @@ async function main() {
     fs.writeFileSync(csvPath, '번호,원문등록번호,제목,처리시각,상태,다운로드,공개구분,기관명,소요시간,비고\n', 'utf8');
   }
 
-  // Paginate and collect
+  // 증분수집: 이미 수집된 문서 로드
+  tlog('[증분] 기수집 문서 목록 로딩...');
+  const alreadyCollected = await loadCollectedSet(opts.outputDir);
+  tlog(`[증분] 기수집 문서: ${alreadyCollected.size}건 (DB + 로컬)`);
+
+  // 이전 중단 상태에서 재개
+  const prevState = loadState(opts.outputDir);
   let collected = 0;
-  let page = 1;
+  let page = prevState?.nextPage || 1;
+  let totalProcessed = prevState?.totalProcessed || 0;
   const perPage = 50;
+  let skippedCount = 0;
+  let errorCount = 0;
+
+  if (prevState) {
+    tlog(`[증분] 이전 상태에서 재개: 페이지 ${page}, 처리완료 ${totalProcessed}건`);
+  }
 
   while (collected < opts.maxCount) {
     const remaining = opts.maxCount - collected;
@@ -1005,15 +1074,28 @@ async function main() {
       const keywords = (doc.tma_kwd || '').replace(/\n/g, ', ').trim();
       const fullDeptNm = htmlDecode(doc.NFLST_CHRG_DEPT_NM || '');
 
-      const folderName = `${collected}_${sanitize(title)}`;
+      // 문서 단위 에러 처리 (에러 시 건너뛰고 다음 문서 계속)
+      try {
+
+      // 증분 체크: 이미 수집된 문서는 건너뜀
+      if (alreadyCollected.has(regNo)) {
+        skippedCount++;
+        totalProcessed++;
+        continue;
+      }
+
+      const folderName = `${totalProcessed + 1}_${sanitize(title)}`;
       const folderPath = path.join(opts.outputDir, folderName);
 
       const docStart = now();
-      tlog(`  [${collected}] ${title.slice(0, 55)} (${insttNm})`);
+      tlog(`  [${collected + 1}] ${title.slice(0, 55)} (${insttNm})`);
 
-      // Resume
+      // 로컬 폴더 존재 시 건너뜀
       if (fs.existsSync(folderPath)) {
-        tlog('    → 건너뜀 (이미 존재)');
+        tlog('    → 건너뜀 (폴더 존재)');
+        alreadyCollected.add(regNo);
+        skippedCount++;
+        totalProcessed++;
         continue;
       }
 
@@ -1453,14 +1535,39 @@ try{
       tlog(`    → 문서 완료 (파일 ${downloadCount}개, ${docElapsed})`);
       fs.appendFileSync(csvPath,
         `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},ok,${downloadCount},${oppLabel},${insttNm},${docElapsed},\n`, 'utf8');
+
+      // 증분: 수집 완료 기록
+      alreadyCollected.add(regNo);
+      totalProcessed++;
+
+      } catch (docErr) {
+        // 문서 단위 에러 → 건너뛰고 다음 문서 계속
+        errorCount++;
+        totalProcessed++;
+        tlog(`    → [에러] ${docErr.message?.slice(0, 80) || '알 수 없는 에러'} — 건너뛰고 계속`);
+        fs.appendFileSync(csvPath,
+          `${collected},${regNo},"${title.replace(/"/g, '""')}",${new Date().toISOString()},error,0,${oppLabel},${insttNm},,${docErr.message?.slice(0, 50) || ''}\n`, 'utf8');
+      }
+
+      // 증분: 진행 상태 저장 (문서 10건마다 + 페이지 넘길 때)
+      if (totalProcessed % 10 === 0) {
+        saveState(opts.outputDir, { nextPage: page, totalProcessed, collected, timestamp: new Date().toISOString() });
+      }
     }
+
+    // 페이지 전환 시 상태 저장
+    saveState(opts.outputDir, { nextPage: page + 1, totalProcessed, collected, timestamp: new Date().toISOString() });
 
     if (items.length < perPage) break;
     page++;
   }
 
   cheliped([{ cmd: 'close' }]);
-  tlog(`\n[완료] 총 ${collected}건 수집, 총 소요시간: ${elapsed(totalStart)}, 출력: ${opts.outputDir}`);
+  // 완료: 상태 파일 삭제
+  try { fs.unlinkSync(getStatePath(opts.outputDir)); } catch {}
+
+  tlog(`\n[완료] 신규 ${collected}건 수집 | 건너뜀 ${skippedCount}건 | 에러 ${errorCount}건 | 총 소요: ${elapsed(totalStart)}`);
+  tlog(`[누적] DB 기수집: ${alreadyCollected.size}건 | 출력: ${opts.outputDir}`);
 }
 
 main().catch(e => { console.error('[오류]', e); process.exit(1); });
