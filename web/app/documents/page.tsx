@@ -23,8 +23,14 @@ export default async function DocumentsPage({ searchParams }: Props) {
   let query = supabase
     .from("documents")
     .select("*", { count: "exact" })
-    .order("collected_at", { ascending: false })
-    .range(offset, offset + PAGE_SIZE - 1);
+    .order("collected_at", { ascending: false });
+
+  // Pagination
+  if (offset > 0) {
+    query = query.range(offset, offset + PAGE_SIZE - 1);
+  } else {
+    query = query.limit(PAGE_SIZE);
+  }
 
   if (keyword) {
     query = query.or(

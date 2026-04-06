@@ -18,19 +18,30 @@ export async function GET() {
 
   try {
     const supabase = createServerSupabase();
-    const { data, error, count } = await supabase
+
+    // Test exact same query as documents page
+    const { data: docs, error: docsErr, count } = await supabase
       .from("documents")
-      .select("id, info_sj", { count: "exact" })
-      .limit(3);
+      .select("*", { count: "exact" })
+      .order("collected_at", { ascending: false })
+      .limit(20);
+
+    // Test stats query
+    const { data: statsData, error: statsErr } = await supabase
+      .from("documents")
+      .select("proc_instt_nm")
+      .not("proc_instt_nm", "is", null);
 
     return NextResponse.json({
       ok: true,
       url: url.slice(0, 30) + "...",
       keyType: process.env.SUPABASE_SERVICE_ROLE_KEY ? "service" : "anon",
-      count,
-      dataLen: data?.length,
-      error: error?.message,
-      sample: data?.map((d: any) => d.info_sj?.slice(0, 30)),
+      docsCount: count,
+      docsLen: docs?.length,
+      docsErr: docsErr?.message,
+      statsLen: statsData?.length,
+      statsErr: statsErr?.message,
+      sample: docs?.map((d: any) => ({ title: d.info_sj?.slice(0, 30), opp: d.opp_se_nm })),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message });
