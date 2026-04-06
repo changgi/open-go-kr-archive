@@ -287,9 +287,9 @@ export default async function DocumentDetailPage({ params }: Props) {
                     </div>
                     <div className="flex items-center gap-2">
                       {f.download_url ? (
-                        <a href={f.download_url} target="_blank" rel="noopener noreferrer" className="text-xs px-3 py-1 rounded bg-primary-600 text-white hover:bg-primary-700">다운로드</a>
+                        <a href={f.download_url} target="_blank" rel="noopener noreferrer" className="text-xs px-3 py-1 rounded bg-primary-600 text-white hover:bg-primary-700 font-medium">다운로드</a>
                       ) : f.downloaded ? (
-                        <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700">수집됨</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700" title="로컬에 저장됨 (Storage 활성화 시 다운로드 가능)">로컬 저장됨</span>
                       ) : null}
                       <span className={`text-xs px-2 py-0.5 rounded ${f.file_opp_yn === "Y" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
                         {f.file_opp_yn === "Y" ? "공개" : "비공개"}

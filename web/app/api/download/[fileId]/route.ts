@@ -29,7 +29,12 @@ export async function GET(
   }
 
   if (!file.file_data) {
-    return NextResponse.json({ error: "File data not available" }, { status: 404 });
+    // DB에 파일 데이터가 없으면 안내
+    return NextResponse.json({
+      error: "파일 데이터가 DB에 저장되지 않았습니다",
+      hint: "수집 시 ENABLE_DB_FILE_DATA=true 또는 ENABLE_STORAGE_UPLOAD=true 설정이 필요합니다",
+      fileName: file.file_nm,
+    }, { status: 404 });
   }
 
   const buffer = Buffer.from(file.file_data, "base64");

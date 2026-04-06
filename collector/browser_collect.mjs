@@ -40,6 +40,11 @@ try {
 const require = createRequire(import.meta.url);
 const anthropicKey = process.env.ANTHROPIC_API_KEY;
 const claude = anthropicKey ? new Anthropic({ apiKey: anthropicKey }) : null;
+
+// 파일 저장 설정
+const ENABLE_STORAGE = process.env.ENABLE_STORAGE_UPLOAD === 'true';
+const ENABLE_DB_FILE = process.env.ENABLE_DB_FILE_DATA === 'true';
+
 const CLI_PATH = path.join(__dirname, 'cheliped-browser', 'scripts', 'cheliped-cli.mjs');
 const CWD = path.join(__dirname, 'cheliped-browser', 'scripts');
 const BASE_URL = 'https://www.open.go.kr';
@@ -714,7 +719,7 @@ ${text.slice(0, 3000)}
 
 // Upload file to Supabase Storage and return public URL
 async function uploadToStorage(buf, storagePath) {
-  if (!supabaseUrl || !supabaseKey) return null;
+  if (!ENABLE_STORAGE || !supabaseUrl || !supabaseKey) return null;
   try {
     const res = await fetch(`${supabaseUrl}/storage/v1/object/documents/${storagePath}`, {
       method: 'POST',
@@ -907,6 +912,7 @@ async function main() {
   const opts = parseArgs();
   const totalStart = now();
   tlog(`[수집 시작] 키워드='${opts.keyword}' 기간=${opts.startDate}~${opts.endDate} 최대=${opts.maxCount}건`);
+  tlog(`[설정] 로컬저장=항상 | DB파일저장=${ENABLE_DB_FILE ? 'ON' : 'OFF'} | Storage업로드=${ENABLE_STORAGE ? 'ON' : 'OFF'} | Claude분석=${claude ? 'ON' : 'OFF'}`);
 
   // Prepare output
   fs.mkdirSync(opts.outputDir, { recursive: true });
@@ -1239,11 +1245,13 @@ try{
               tlog(`    → 내용: ${f._content.length.toLocaleString()}자 추출 (${elapsed(docStart)})`);
             }
 
-            // Supabase Storage 업로드
-            const storagePath = `${regNo}/${fname}`;
-            f._downloadUrl = await uploadToStorage(fileBuf, storagePath);
-            if (f._downloadUrl) {
-              tlog(`    → Storage: 업로드 완료`);
+            // Supabase Storage 업로드 (설정 시)
+            if (ENABLE_STORAGE) {
+              const storagePath = `${regNo}/${fname}`;
+              f._downloadUrl = await uploadToStorage(fileBuf, storagePath);
+              if (f._downloadUrl) {
+                tlog(`    → Storage: 업로드 완료`);
+              }
             }
 
             // ZIP 파일 구조 분석
@@ -1427,8 +1435,10 @@ try{
                 is_archive: isArchiveFile(f.fileNm),
                 archive_entries: f._archiveEntries ? JSON.stringify(f._archiveEntries) : null,
                 file_properties: f._properties ? JSON.stringify(f._properties) : null,
-                download_url: f._downloaded ? `/api/download/${f.fileId}` : null,
-                file_data: f._fileBase64 || null,
+                // 다운로드 URL: Storage > DB > 없음
+                download_url: f._downloadUrl || (ENABLE_DB_FILE && f._downloaded ? `/api/download/${f.fileId}` : null),
+                // DB에 파일 바이너리 저장 (설정 시에만, 대용량 수집 시 비활성화 권장)
+                file_data: ENABLE_DB_FILE ? (f._fileBase64 || null) : null,
                 content: f._content ? f._content.slice(0, 100000) : null,
                 summary: f._summary || null,
                 content_length: f._content ? f._content.length : null,
