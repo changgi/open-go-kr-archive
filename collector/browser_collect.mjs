@@ -1198,6 +1198,7 @@ try{
             fs.writeFileSync(path.join(folderPath, fname), fileBuf);
             downloadCount++;
             f._downloaded = true;
+            f._fileBase64 = dlData.data; // base64 원본 보존 (DB 저장용)
             tlog(`    → 다운로드: ${f.fileSeDc}_${f.fileNm} (${formatBytes(dlData.size)}) (${elapsed(docStart)})`);
 
             // 파일 속성 추출
@@ -1423,7 +1424,8 @@ try{
                 is_archive: isArchiveFile(f.fileNm),
                 archive_entries: f._archiveEntries ? JSON.stringify(f._archiveEntries) : null,
                 file_properties: f._properties ? JSON.stringify(f._properties) : null,
-                download_url: f._downloadUrl || null,
+                download_url: f._downloaded ? `/api/download/${f.fileId}` : null,
+                file_data: f._fileBase64 || null,
                 content: f._content ? f._content.slice(0, 100000) : null,
                 summary: f._summary || null,
                 content_length: f._content ? f._content.length : null,
