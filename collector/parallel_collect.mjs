@@ -93,17 +93,27 @@ function parseArgs() {
 // ── 쿠키 추출 ──
 function extractCookies() {
   log('[쿠키] 브라우저로 세션 쿠키 추출...');
-  const S = 'par-' + process.pid;
   try {
-    const r = execFileSync('node', [CLI_PATH, '--session', S, JSON.stringify([
+    // --session 없이 직접 실행 (세션 옵션이 타임아웃 유발)
+    const r = execFileSync('node', [CLI_PATH, JSON.stringify([
       {cmd:'goto',args:[`${BASE}/othicInfo/infoList/orginlInfoList.do`]},
       {cmd:'run-js',args:['document.cookie']},
-    ])], {encoding:'utf8',timeout:180000,cwd:CWD});
+      {cmd:'close'},
+    ])], {encoding:'utf8',timeout:120000,cwd:CWD});
     const p = JSON.parse(r);
     const cookies = p[1]?.result?.result;
-    try{execFileSync('node',[CLI_PATH,'--session',S,JSON.stringify([{cmd:'close'}])],{encoding:'utf8',timeout:10000,cwd:CWD});}catch{}
-    if(cookies){log(`[쿠키] 성공: ${cookies.slice(0,50)}...`);return cookies;}
-  }catch(e){log(`[쿠키] 실패: ${e.message?.slice(0,50)}`);}
+    if(cookies){log(`[쿠키] 성공: ${cookies.slice(0,60)}...`);return cookies;}
+  }catch(e){
+    // stdout에서 추출 시도
+    if(e.stdout){
+      try{
+        const p=JSON.parse(e.stdout);
+        const c=p[1]?.result?.result;
+        if(c){log(`[쿠키] 성공(stderr): ${c.slice(0,60)}...`);return c;}
+      }catch{}
+    }
+    log(`[쿠키] 실패: ${e.message?.slice(0,80)}`);
+  }
   return null;
 }
 
@@ -139,10 +149,9 @@ async function loadCollected(outputDir) {
 
 // ── 1단계: 브라우저로 목록 수집 ──
 async function collectMetaList(cookies, opts, already) {
-  log('[1단계] 브라우저 세션으로 목록 수집...');
-  const S = 'list-' + process.pid;
+  log('[1단계] 브라우저로 목록 수집...');
   const docs = [];
-  let page = 1, rtnTotal = 0;
+  let page = 1, rtnTotal = 0, retries = 0;
 
   // 상태 복원
   const stPath = path.join(opts.outputDir, '.parallel_state.json');
@@ -151,20 +160,33 @@ async function collectMetaList(cookies, opts, already) {
   while (docs.length < opts.maxCount) {
     const listJs = `var x=new XMLHttpRequest();x.open("POST","/othicInfo/infoList/orginlInfoList.ajax",false);x.setRequestHeader("Content-Type","application/x-www-form-urlencoded");x.setRequestHeader("X-Requested-With","XMLHttpRequest");x.send("kwd=${encodeURIComponent(opts.keyword)}&startDate=${opts.startDate}&endDate=${opts.endDate}&insttCd=&insttSeCd=&othbcSeCd=${opts.oppSeCd}&viewPage=${page}&rowPage=50&sort=d");var j=JSON.parse(x.responseText);JSON.stringify({code:j.result&&j.result.code,total:j.result&&j.result.rtnTotal,list:j.result&&j.result.rtnList});`.replace(/\n/g,' ');
 
-    const results = execFileSync('node', [CLI_PATH, '--session', S, JSON.stringify([
-      ...(page === 1 ? [{cmd:'goto',args:[`${BASE}/othicInfo/infoList/orginlInfoList.do`]}] : []),
-      {cmd:'run-js',args:[listJs]},
-    ])], {encoding:'utf8',timeout:120000,maxBuffer:50*1024*1024,cwd:CWD});
+    // 매 호출마다 goto + run-js (세션 없이)
+    let results;
+    try {
+      const r = execFileSync('node', [CLI_PATH, JSON.stringify([
+        {cmd:'goto',args:[`${BASE}/othicInfo/infoList/orginlInfoList.do`]},
+        {cmd:'run-js',args:[listJs]},
+      ])], {encoding:'utf8',timeout:120000,maxBuffer:50*1024*1024,cwd:CWD});
+      results = JSON.parse(r);
+    } catch(e) {
+      if(e.stdout) try{results=JSON.parse(e.stdout);}catch{}
+      if(!results){
+        retries++;
+        if(retries>=5){log('[중단] 5회 연속 실패');break;}
+        log(`  [재시도] ${retries}/5`);
+        await sleep(3000);
+        continue;
+      }
+    }
+    retries = 0;
 
-    const parsed = JSON.parse(results);
-    const jsIdx = page === 1 ? 1 : 0;
     let listData = null;
-    const val = parsed[jsIdx]?.result?.result;
+    const val = results?.[1]?.result?.result;
     if(typeof val==='string')try{listData=JSON.parse(val);}catch{}
 
     if(!listData||listData.code!=='200'){
-      log(`  [경고] 페이지 ${page} 실패, 재접속...`);
-      try{execFileSync('node',[CLI_PATH,'--session',S,JSON.stringify([{cmd:'goto',args:[`${BASE}/othicInfo/infoList/orginlInfoList.do`]}])],{encoding:'utf8',timeout:60000,cwd:CWD});}catch{}
+      log(`  [경고] 페이지 ${page} 코드: ${listData?.code}, 재시도...`);
+      await sleep(2000);
       continue;
     }
 
@@ -204,7 +226,6 @@ async function collectMetaList(cookies, opts, already) {
     page++;
   }
 
-  try{execFileSync('node',[CLI_PATH,'--session',S,JSON.stringify([{cmd:'close'}])],{encoding:'utf8',timeout:10000,cwd:CWD});}catch{}
   try{fs.unlinkSync(path.join(opts.outputDir,'.parallel_state.json'));}catch{}
   log(`[1단계 완료] ${docs.length.toLocaleString()}건 수집`);
   return docs;
