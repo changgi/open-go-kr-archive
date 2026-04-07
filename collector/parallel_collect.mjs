@@ -158,15 +158,32 @@ async function collectMetaList(cookies, opts, already) {
   try { const st = JSON.parse(fs.readFileSync(stPath,'utf8')); page=st.nextPage||1; docs.push(...(st.docs||[])); log(`[재개] 페이지 ${page}부터, 기존 ${docs.length}건`); } catch{}
 
   while (docs.length < opts.maxCount) {
-    const listJs = `var x=new XMLHttpRequest();x.open("POST","/othicInfo/infoList/orginlInfoList.ajax",false);x.setRequestHeader("Content-Type","application/x-www-form-urlencoded");x.setRequestHeader("X-Requested-With","XMLHttpRequest");x.send("kwd=${encodeURIComponent(opts.keyword)}&startDate=${opts.startDate}&endDate=${opts.endDate}&insttCd=&insttSeCd=&othbcSeCd=${opts.oppSeCd}&viewPage=${page}&rowPage=50&sort=d");var j=JSON.parse(x.responseText);JSON.stringify({code:j.result&&j.result.code,total:j.result&&j.result.rtnTotal,list:j.result&&j.result.rtnList});`.replace(/\n/g,' ');
+    // 배치: 한 번의 cheliped run-js에서 20페이지 연속 조회
+    const batchSize = 20;
+    const batchEndPage = Math.min(page + batchSize - 1, page + 10000);
+    const batchJs = `
+var allItems=[];var total=0;var code="";
+for(var p=${page};p<=${batchEndPage};p++){
+  var x=new XMLHttpRequest();x.open("POST","/othicInfo/infoList/orginlInfoList.ajax",false);
+  x.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
+  x.setRequestHeader("X-Requested-With","XMLHttpRequest");
+  x.send("kwd=${encodeURIComponent(opts.keyword)}&startDate=${opts.startDate}&endDate=${opts.endDate}&insttCd=&insttSeCd=&othbcSeCd=${opts.oppSeCd}&viewPage="+p+"&rowPage=50&sort=d");
+  var j=JSON.parse(x.responseText);
+  code=j.result&&j.result.code;if(code!=="200")break;
+  total=j.result.rtnTotal;
+  var list=j.result.rtnList||[];
+  for(var i=0;i<list.length;i++)allItems.push(list[i]);
+  if(list.length<50)break;
+}
+JSON.stringify({code:code,total:total,count:allItems.length,endPage:p,list:allItems});
+    `.replace(/\n/g,' ');
 
-    // 매 호출마다 goto + run-js (세션 없이)
     let results;
     try {
       const r = execFileSync('node', [CLI_PATH, JSON.stringify([
         {cmd:'goto',args:[`${BASE}/othicInfo/infoList/orginlInfoList.do`]},
-        {cmd:'run-js',args:[listJs]},
-      ])], {encoding:'utf8',timeout:120000,maxBuffer:50*1024*1024,cwd:CWD});
+        {cmd:'run-js',args:[batchJs]},
+      ])], {encoding:'utf8',timeout:180000,maxBuffer:100*1024*1024,cwd:CWD});
       results = JSON.parse(r);
     } catch(e) {
       if(e.stdout) try{results=JSON.parse(e.stdout);}catch{}
@@ -215,15 +232,14 @@ async function collectMetaList(cookies, opts, already) {
       if(docs.length>=opts.maxCount)break;
     }
 
-    if(page%20===0||page<=3)
-      log(`  페이지 ${page}: +${newCount} | 누적 ${docs.length.toLocaleString()}/${rtnTotal.toLocaleString()}`);
+    const endPage = listData.endPage || page + batchSize;
+    log(`  페이지 ${page}~${endPage}: +${newCount} (배치 ${items.length}건) | 누적 ${docs.length.toLocaleString()}/${rtnTotal.toLocaleString()}`);
 
-    // 상태 저장 (100페이지마다)
-    if(page%100===0)
-      fs.writeFileSync(stPath, JSON.stringify({nextPage:page+1,docs:docs.slice(-50000)}), 'utf8');
+    // 상태 저장
+    fs.writeFileSync(stPath, JSON.stringify({nextPage:endPage+1,docs:docs.slice(-50000)}), 'utf8');
 
-    if(items.length<50)break;
-    page++;
+    if(items.length < batchSize * 50)break;
+    page = endPage + 1;
   }
 
   try{fs.unlinkSync(path.join(opts.outputDir,'.parallel_state.json'));}catch{}
