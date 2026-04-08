@@ -311,17 +311,27 @@ async function detailWorker(workerId, docs, cookies, opts, csvPath, stats) {
       }
 
       // DOM 메타 추출 (th/td)
-      let fullNstClNm = doc.nstClNm, prsrvPdCd = '';
+      let fullNstClNm = doc.nstClNm, prsrvPdCd = '', detailDeptNm = doc.deptNm, detailDocNo = doc.docNo;
       const thMatches = html.match(/<th[^>]*>(.*?)<\/th>/gs) || [];
       const tdMatches = html.match(/<td[^>]*>(.*?)<\/td>/gs) || [];
       const dom = {};
-      thMatches.forEach((th, i) => {
+      thMatches.forEach((th, idx) => {
         const key = th.replace(/<[^>]+>/g, '').trim();
-        const val = (tdMatches[i] || '').replace(/<[^>]+>/g, '').trim();
+        const val = (tdMatches[idx] || '').replace(/<[^>]+>/g, '').trim();
         if (key) dom[key] = val;
       });
       if (dom['분류체계']) fullNstClNm = dom['분류체계'];
       if (dom['보존기간']) prsrvPdCd = dom['보존기간'];
+      if (dom['담당부서명'] && !detailDeptNm) detailDeptNm = dom['담당부서명'];
+      if (dom['문서번호'] && !detailDocNo) detailDocNo = dom['문서번호'];
+
+      // VO에서도 추출 (더 정확할 수 있음)
+      if (vo) {
+        if (vo.nstClNm) fullNstClNm = vo.nstClNm;
+        if (vo.prsrvPdCd) prsrvPdCd = vo.prsrvPdCd;
+        if (vo.chrgDeptNm) detailDeptNm = vo.chrgDeptNm;
+        if (vo.docNo) detailDocNo = vo.docNo;
+      }
 
       // 파일 다운로드
       let downloadCount = 0;
@@ -380,11 +390,38 @@ async function detailWorker(workerId, docs, cookies, opts, csvPath, stats) {
         }
       }
 
+      // metadata.md 생성
+      if (!opts.metaOnly) {
+        fs.mkdirSync(folderPath, { recursive: true });
+        const oppLabel = OPP[doc.oppSeCd] || doc.oppSeCd;
+        const fmtDate = doc.pDate?.length>=8 ? `${doc.pDate.slice(0,4)}.${doc.pDate.slice(4,6)}.${doc.pDate.slice(6,8)}` : '-';
+        let md = `# ${doc.title}\n\n## 메타데이터\n\n| 항목 | 내용 |\n|------|------|\n`;
+        md += `| 제목 | ${doc.title} |\n| 문서번호 | ${detailDocNo} |\n| 기관명 | ${doc.insttNm} |\n`;
+        md += `| 담당부서 | ${detailDeptNm} |\n| 담당자 | ${doc.chargerNm} |\n| 생산일자 | ${fmtDate} |\n`;
+        md += `| 보존기간 | ${prsrvPdCd} |\n| 단위업무 | ${doc.unitJob} |\n| 공개여부 | ${oppLabel} |\n`;
+        md += `| 분류체계 | ${fullNstClNm} |\n| 원문등록번호 | ${doc.regNo} |\n`;
+        if (doc.keywords) md += `| 키워드 | ${doc.keywords} |\n`;
+        md += `\n## 파일 목록 (${fileList.length}개)\n\n`;
+        for (const f of fileList) {
+          const [dlOk] = canDownload(vo?.oppSeCd, f.fileOppYn, vo?.urtxtYn, vo?.dtaRedgLmttEndYmd);
+          md += `- **${f.fileSeDc||'기타'}**: ${f.fileNm} (${formatBytes(Number(f.fileByteNum))}) [${dlOk?'공개':'비공개'}]\n`;
+        }
+        md += `\n## 원문 링크\n\n${detailUrl}\n`;
+        fs.writeFileSync(path.join(folderPath, 'metadata.md'), md, 'utf8');
+      }
+
+      // PDF 텍스트에서 추가 메타 추출
+      let bodyText = '';
+      const bodyContentFile = fs.readdirSync(folderPath || '.').find(f => f.endsWith('_내용.md'));
+      if (bodyContentFile && folderPath) {
+        try { bodyText = fs.readFileSync(path.join(folderPath, bodyContentFile), 'utf8').replace(/^#.*\n\n/, ''); } catch {}
+      }
+
       // Supabase 저장
       if (supabaseUrl && supabaseKey) {
         const docData = {
-          prdctn_instt_regist_no: doc.regNo, info_sj: doc.title, doc_no: doc.docNo,
-          proc_instt_nm: doc.insttNm, chrg_dept_nm: doc.deptNm, charger_nm: doc.chargerNm,
+          prdctn_instt_regist_no: doc.regNo, info_sj: doc.title, doc_no: detailDocNo,
+          proc_instt_nm: doc.insttNm, chrg_dept_nm: detailDeptNm, charger_nm: doc.chargerNm,
           prdctn_dt: doc.pDate?.length>=8 ? `${doc.pDate.slice(0,4)}-${doc.pDate.slice(4,6)}-${doc.pDate.slice(6,8)}` : null,
           prdctn_dt_raw: doc.prdnDt, unit_job_nm: doc.unitJob,
           opp_se_cd: doc.oppSeCd, opp_se_nm: OPP[doc.oppSeCd]||doc.oppSeCd,
