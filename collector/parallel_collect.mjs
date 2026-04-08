@@ -189,7 +189,12 @@ JSON.stringify({code:code,total:total,count:allItems.length,endPage:p,list:allIt
       if(e.stdout) try{results=JSON.parse(e.stdout);}catch{}
       if(!results){
         retries++;
-        if(retries>=5){log('[중단] 5회 연속 실패');break;}
+        if(retries>=5){
+          // 상태 저장 후 중단 (재실행 시 이어서)
+          fs.writeFileSync(stPath, JSON.stringify({nextPage:page,docsCount:docs.length}), 'utf8');
+          log(`[중단] 5회 연속 실패. 재실행하면 페이지 ${page}부터 재개됩니다.`);
+          break;
+        }
         log(`  [재시도] ${retries}/5`);
         await sleep(3000);
         continue;
@@ -235,8 +240,38 @@ JSON.stringify({code:code,total:total,count:allItems.length,endPage:p,list:allIt
     const endPage = listData.endPage || page + batchSize;
     log(`  페이지 ${page}~${endPage}: +${newCount} (배치 ${items.length}건) | 누적 ${docs.length.toLocaleString()}/${rtnTotal.toLocaleString()}`);
 
+    // 즉시 CSV 저장 (매 배치)
+    const csvPath = path.join(opts.outputDir, 'collection_log.csv');
+    const newDocs = docs.slice(-newCount);
+    for (const d of newDocs) {
+      fs.appendFileSync(csvPath,
+        `${docs.length},"${d.regNo}","${d.title.replace(/"/g,'""')}","${d.insttNm}",${d.pDate},"${OPP[d.oppSeCd]||d.oppSeCd}"\n`, 'utf8');
+    }
+
+    // 즉시 DB 배치 저장 (매 배치)
+    if (supabaseUrl && supabaseKey && newDocs.length > 0) {
+      const dbBatch = newDocs.map(d => ({
+        prdctn_instt_regist_no: d.regNo, info_sj: d.title, doc_no: d.docNo,
+        proc_instt_nm: d.insttNm, chrg_dept_nm: d.deptNm, charger_nm: d.chargerNm,
+        prdctn_dt: d.pDate?.length>=8 ? `${d.pDate.slice(0,4)}-${d.pDate.slice(4,6)}-${d.pDate.slice(6,8)}` : null,
+        prdctn_dt_raw: d.prdnDt, unit_job_nm: d.unitJob,
+        opp_se_cd: d.oppSeCd, opp_se_nm: OPP[d.oppSeCd]||d.oppSeCd,
+        nst_cl_nm: d.nstClNm, instt_cd: d.insttCd, instt_se_cd: d.nstSeCd,
+        keywords: d.keywords||null, full_dept_nm: d.fullDeptNm||null,
+        status: 'meta_only',
+      }));
+      for (let i=0;i<dbBatch.length;i+=100) {
+        try {
+          await fetch(`${supabaseUrl}/rest/v1/documents?on_conflict=prdctn_instt_regist_no`, {
+            method:'POST', headers:{'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
+            body:JSON.stringify(dbBatch.slice(i,i+100)),
+          });
+        } catch {}
+      }
+    }
+
     // 상태 저장
-    fs.writeFileSync(stPath, JSON.stringify({nextPage:endPage+1,docs:docs.slice(-50000)}), 'utf8');
+    fs.writeFileSync(stPath, JSON.stringify({nextPage:endPage+1,docsCount:docs.length}), 'utf8');
 
     if(items.length < batchSize * 50)break;
     page = endPage + 1;
