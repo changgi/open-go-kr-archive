@@ -115,11 +115,22 @@ function extractCookies() {
 }
 
 // DB에서 meta_only 문서 로드
-async function loadMetaOnly(limit) {
-  const r = await fetch(`${supabaseUrl}/rest/v1/documents?status=eq.meta_only&select=prdctn_instt_regist_no,prdctn_dt_raw,instt_se_cd,info_sj,proc_instt_nm,chrg_dept_nm,charger_nm,doc_no,unit_job_nm,opp_se_cd,nst_cl_nm,instt_cd,keywords,full_dept_nm&order=collected_at.asc&limit=${limit}`, {
-    headers: {'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`},
-  });
-  return await r.json();
+async function loadMetaOnly(maxCount) {
+  const all = [];
+  let offset = 0;
+  const pageSize = 1000;
+  while (all.length < maxCount) {
+    const r = await fetch(`${supabaseUrl}/rest/v1/documents?status=eq.meta_only&select=prdctn_instt_regist_no,prdctn_dt_raw,instt_se_cd,info_sj,proc_instt_nm,chrg_dept_nm,charger_nm,doc_no,unit_job_nm,opp_se_cd,nst_cl_nm,instt_cd,keywords,full_dept_nm&order=collected_at.asc&limit=${pageSize}&offset=${offset}`, {
+      headers: {'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`},
+    });
+    const rows = await r.json();
+    if (!rows.length) break;
+    all.push(...rows);
+    log(`  [DB] ${all.length.toLocaleString()}건 로드...`);
+    offset += pageSize;
+    if (rows.length < pageSize) break;
+  }
+  return all.slice(0, maxCount);
 }
 
 // 워커
