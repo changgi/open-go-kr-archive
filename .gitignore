@@ -60,3 +60,12 @@ collector/complete_test/
 collector/ai_test/
 collector/ai_final/
 collector/.env
+collector/full_collection/
+collector/final_v2/
+collector/pipeline_test/
+collector/pipeline_test2/
+collector/zip_final/
+collector/*.db
+collector/*.log
+collector/*.csv
+collector/.parallel_state.json
