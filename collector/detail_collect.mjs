@@ -17,6 +17,7 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { initDB, getMetaOnlyDocs, updateDocDetail, upsertFile, getStats, syncToSupabase, closeDB } from './local_db.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -115,20 +116,25 @@ function extractCookies() {
 }
 
 // DB에서 meta_only 문서 로드
-async function loadMetaOnly(maxCount) {
+// SQLite에서 로드 (즉시, limit 없음)
+function loadMetaOnlyLocal(maxCount) {
+  return getMetaOnlyDocs(maxCount);
+}
+
+// Supabase에서 로드 (fallback)
+async function loadMetaOnlyRemote(maxCount) {
   const all = [];
   let offset = 0;
-  const pageSize = 1000;
   while (all.length < maxCount) {
-    const r = await fetch(`${supabaseUrl}/rest/v1/documents?status=eq.meta_only&select=prdctn_instt_regist_no,prdctn_dt_raw,instt_se_cd,info_sj,proc_instt_nm,chrg_dept_nm,charger_nm,doc_no,unit_job_nm,opp_se_cd,nst_cl_nm,instt_cd,keywords,full_dept_nm&order=collected_at.asc&limit=${pageSize}&offset=${offset}`, {
+    const r = await fetch(`${supabaseUrl}/rest/v1/documents?status=eq.meta_only&select=prdctn_instt_regist_no,prdctn_dt_raw,instt_se_cd,info_sj,proc_instt_nm,chrg_dept_nm,charger_nm,doc_no,unit_job_nm,opp_se_cd,nst_cl_nm,instt_cd,keywords,full_dept_nm&order=collected_at.asc&limit=1000&offset=${offset}`, {
       headers: {'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`},
     });
     const rows = await r.json();
     if (!rows.length) break;
     all.push(...rows);
-    log(`  [DB] ${all.length.toLocaleString()}건 로드...`);
-    offset += pageSize;
-    if (rows.length < pageSize) break;
+    if(all.length%5000===0) log(`  [Supabase] ${all.length.toLocaleString()}건 로드...`);
+    offset += 1000;
+    if (rows.length < 1000) break;
   }
   return all.slice(0, maxCount);
 }
@@ -243,7 +249,7 @@ async function worker(id, docs, cookies, opts, stats) {
       md += `\n## 원문 링크\n\n${detailUrl}\n`;
       fs.writeFileSync(path.join(folderPath,'metadata.md'), md, 'utf8');
 
-      // DB 업데이트
+      // SQLite 즉시 업데이트 (네트워크 0ms)
       const update = {
         doc_no: detailDocNo, chrg_dept_nm: detailDeptNm,
         nst_cl_nm: fullNstClNm, prsrv_pd_cd: prsrvPdCd||null,
@@ -265,11 +271,18 @@ async function worker(id, docs, cookies, opts, stats) {
           contact_info: aiResult.contact ? JSON.stringify(aiResult.contact) : null,
         });
       }
+      updateDocDetail(regNo, update);
 
-      await fetch(`${supabaseUrl}/rest/v1/documents?prdctn_instt_regist_no=eq.${regNo}`, {
-        method:'PATCH', headers:{'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`,'Content-Type':'application/json','Prefer':'return=minimal'},
-        body:JSON.stringify(update),
-      });
+      // 파일 메타도 SQLite에 저장
+      for (const f of fileList) {
+        upsertFile({
+          file_id: f.fileId, document_id: regNo,
+          file_nm: f.fileNm, file_se_dc: f.fileSeDc,
+          file_byte_num: Number(f.fileByteNum)||null, file_opp_yn: f.fileOppYn,
+          file_ext: getFileExt(f.fileNm), is_archive: f.fileNm?.toLowerCase().endsWith('.zip'),
+          downloaded: downloadCount > 0 && canDownload(vo?.oppSeCd,f.fileOppYn,vo?.urtxtYn,'')?.[0],
+        });
+      }
 
       stats.total++;
       if(stats.total%50===0){
@@ -290,16 +303,42 @@ async function main() {
 
   fs.mkdirSync(opts.outputDir, {recursive:true});
 
+  // SQLite 초기화
+  const dbPath = path.join(opts.outputDir, 'collection.db');
+  initDB(dbPath);
+  log(`[SQLite] ${dbPath} (192K건/초)`);
+
+  // 기존 Supabase 데이터를 SQLite로 가져오기 (최초 1회)
+  const localStats = getStats();
+  if (localStats.total === 0 && supabaseUrl && supabaseKey) {
+    log('[동기화] Supabase → SQLite 초기 동기화...');
+    const remoteDocs = await loadMetaOnlyRemote(200000);
+    if (remoteDocs.length > 0) {
+      const { upsertDocuments } = await import('./local_db.mjs');
+      upsertDocuments(remoteDocs.map(d => ({
+        prdctn_instt_regist_no: d.prdctn_instt_regist_no,
+        info_sj: d.info_sj, doc_no: d.doc_no, proc_instt_nm: d.proc_instt_nm,
+        chrg_dept_nm: d.chrg_dept_nm, charger_nm: d.charger_nm,
+        prdctn_dt_raw: d.prdctn_dt_raw, unit_job_nm: d.unit_job_nm,
+        opp_se_cd: d.opp_se_cd, opp_se_nm: d.opp_se_nm || OPP[d.opp_se_cd],
+        nst_cl_nm: d.nst_cl_nm, instt_cd: d.instt_cd, instt_se_cd: d.instt_se_cd,
+        keywords: d.keywords, full_dept_nm: d.full_dept_nm,
+        status: 'meta_only',
+      })));
+      log(`[동기화] ${remoteDocs.length.toLocaleString()}건 가져옴`);
+    }
+  }
+
+  // SQLite에서 meta_only 로드 (즉시, limit 없음)
+  const limit = opts.maxCount === Infinity ? 200000 : opts.maxCount;
+  log(`[SQLite] meta_only 문서 로딩...`);
+  const docs = loadMetaOnlyLocal(limit);
+  log(`[SQLite] ${docs.length.toLocaleString()}건 (${getStats().total.toLocaleString()}건 중)`);
+  if(!docs.length){log('[완료] 처리할 문서 없음');return;}
+
   // 쿠키
   const cookies = extractCookies();
-  if(!cookies){log('[실패] 쿠키 추출 불가');return;}
-
-  // DB에서 meta_only 문서 로드
-  const limit = opts.maxCount === Infinity ? 100000 : opts.maxCount;
-  log(`[DB] meta_only 문서 로딩 (최대 ${limit.toLocaleString()}건)...`);
-  const docs = await loadMetaOnly(limit);
-  log(`[DB] ${docs.length.toLocaleString()}건 로드`);
-  if(!docs.length){log('[완료] 처리할 문서 없음');return;}
+  if(!cookies){closeDB();log('[실패] 쿠키 추출 불가');return;}
 
   // 병렬 분배
   const chunkSize = Math.ceil(docs.length / opts.workers);
@@ -309,12 +348,23 @@ async function main() {
   for(let w=0;w<opts.workers;w++){
     const chunk = docs.slice(w*chunkSize, (w+1)*chunkSize);
     if(!chunk.length) continue;
-    log(`  [W${w}] ${chunk.length}건`);
+    log(`  [W${w}] ${chunk.length.toLocaleString()}건`);
     workers.push(worker(w, chunk, cookies, opts, stats));
   }
 
   await Promise.all(workers);
-  log(`\n[완료] ${stats.total.toLocaleString()}건 | 에러 ${stats.errors} | ${(stats.total/((now()-totalStart)/1000)).toFixed(1)}건/초 | ${elapsed(totalStart)}`);
+
+  // Supabase 동기화
+  if (supabaseUrl && supabaseKey) {
+    log('[동기화] SQLite → Supabase...');
+    const synced = await syncToSupabase(supabaseUrl, supabaseKey);
+    log(`[동기화] ${synced.toLocaleString()}건 동기화 완료`);
+  }
+
+  const finalStats = getStats();
+  closeDB();
+  log(`\n[완료] ${stats.total.toLocaleString()}건 처리 | 에러 ${stats.errors} | ${(stats.total/((now()-totalStart)/1000)).toFixed(1)}건/초 | ${elapsed(totalStart)}`);
+  log(`[DB] 전체 ${finalStats.total.toLocaleString()} | ok ${finalStats.ok.toLocaleString()} | AI ${finalStats.has_ai.toLocaleString()} | 파일 ${finalStats.has_files.toLocaleString()}`);
 }
 
 main().catch(e=>{console.error(e);process.exit(1);});
