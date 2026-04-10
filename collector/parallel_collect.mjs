@@ -23,6 +23,7 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { initDB, upsertDocuments, getCollectedSet, getStats, closeDB } from './local_db.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -128,23 +129,8 @@ function headers(cookies) {
 
 // ── 기수집 로드 ──
 async function loadCollected(outputDir) {
-  const set = new Set();
-  const csvPath = path.join(outputDir, 'collection_log.csv');
-  if(fs.existsSync(csvPath)){
-    fs.readFileSync(csvPath,'utf8').split('\n').slice(1).forEach(line=>{
-      const m=line.match(/^\d+,"?([^",]+)/);if(m)set.add(m[1]);
-    });
-  }
-  if(supabaseUrl&&supabaseKey){
-    try{let off=0;while(true){
-      const r=await fetch(`${supabaseUrl}/rest/v1/documents?select=prdctn_instt_regist_no&limit=1000&offset=${off}`,
-        {headers:{'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`}});
-      if(!r.ok)break;const rows=await r.json();if(!rows.length)break;
-      rows.forEach(r=>{if(r.prdctn_instt_regist_no)set.add(r.prdctn_instt_regist_no);});
-      off+=1000;if(rows.length<1000)break;
-    }}catch{}
-  }
-  return set;
+  // SQLite에서 즉시 로드 (네트워크 없음)
+  return getCollectedSet();
 }
 
 // ── 1단계: 브라우저로 목록 수집 ──
@@ -248,8 +234,8 @@ JSON.stringify({code:code,total:total,count:allItems.length,endPage:p,list:allIt
         `${docs.length},"${d.regNo}","${d.title.replace(/"/g,'""')}","${d.insttNm}",${d.pDate},"${OPP[d.oppSeCd]||d.oppSeCd}"\n`, 'utf8');
     }
 
-    // 즉시 DB 배치 저장 (매 배치)
-    if (supabaseUrl && supabaseKey && newDocs.length > 0) {
+    // SQLite 배치 저장 (즉시, 네트워크 없음)
+    if (newDocs.length > 0) {
       const dbBatch = newDocs.map(d => ({
         prdctn_instt_regist_no: d.regNo, info_sj: d.title, doc_no: d.docNo,
         proc_instt_nm: d.insttNm, chrg_dept_nm: d.deptNm, charger_nm: d.chargerNm,
@@ -260,20 +246,16 @@ JSON.stringify({code:code,total:total,count:allItems.length,endPage:p,list:allIt
         keywords: d.keywords||null, full_dept_nm: d.fullDeptNm||null,
         status: 'meta_only',
       }));
-      for (let i=0;i<dbBatch.length;i+=100) {
-        try {
-          await fetch(`${supabaseUrl}/rest/v1/documents?on_conflict=prdctn_instt_regist_no`, {
-            method:'POST', headers:{'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
-            body:JSON.stringify(dbBatch.slice(i,i+100)),
-          });
-        } catch {}
-      }
+      try { upsertDocuments(dbBatch); } catch {}
     }
 
     // 상태 저장
     fs.writeFileSync(stPath, JSON.stringify({nextPage:endPage+1,docsCount:docs.length}), 'utf8');
 
-    if(items.length < batchSize * 50)break;
+    // totalPages 기준으로 종료 (기수집 skip해도 계속 진행)
+    const totalPages = Math.ceil(rtnTotal / 50);
+    if (endPage >= totalPages) { log('[목록] 마지막 페이지 도달'); break; }
+    if (items.length === 0) { log('[목록] 빈 응답'); break; }
     page = endPage + 1;
   }
 
@@ -466,6 +448,10 @@ async function main() {
   if (!fs.existsSync(csvPath))
     fs.writeFileSync(csvPath, '\uFEFF번호,원문등록번호,제목,기관명,생산일자,공개구분\n', 'utf8');
 
+  // SQLite 초기화
+  initDB(path.join(opts.outputDir, 'collection.db'));
+  log('[SQLite] 초기화 완료');
+
   // 증분
   log('[증분] 기수집 로딩...');
   const already = await loadCollected(opts.outputDir);
@@ -479,30 +465,10 @@ async function main() {
   if (!allDocs.length) { log('[완료] 신규 문서 없음'); return; }
 
   if (opts.metaOnly) {
-    // 메타만이면 DB 배치 저장
-    log('[메타만 모드] DB 배치 저장...');
-    for (let i = 0; i < allDocs.length; i += 100) {
-      const chunk = allDocs.slice(i, i+100).map(d => ({
-        prdctn_instt_regist_no: d.regNo, info_sj: d.title, doc_no: d.docNo,
-        proc_instt_nm: d.insttNm, chrg_dept_nm: d.deptNm, charger_nm: d.chargerNm,
-        prdctn_dt: d.pDate?.length>=8 ? `${d.pDate.slice(0,4)}-${d.pDate.slice(4,6)}-${d.pDate.slice(6,8)}` : null,
-        prdctn_dt_raw: d.prdnDt, unit_job_nm: d.unitJob,
-        opp_se_cd: d.oppSeCd, opp_se_nm: OPP[d.oppSeCd]||d.oppSeCd,
-        nst_cl_nm: d.nstClNm, instt_cd: d.insttCd, instt_se_cd: d.nstSeCd,
-        keywords: d.keywords||null, full_dept_nm: d.fullDeptNm||null,
-        status: 'meta_only',
-      }));
-      if (supabaseUrl && supabaseKey) {
-        try {
-          await fetch(`${supabaseUrl}/rest/v1/documents?on_conflict=prdctn_instt_regist_no`, {
-            method:'POST', headers:{'apikey':supabaseKey,'Authorization':`Bearer ${supabaseKey}`,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates'},
-            body:JSON.stringify(chunk),
-          });
-        } catch {}
-      }
-      if ((i/100) % 10 === 0) log(`  DB 저장: ${Math.min(i+100, allDocs.length).toLocaleString()}/${allDocs.length.toLocaleString()}`);
-    }
-    log(`\n[완료] 메타데이터 ${allDocs.length.toLocaleString()}건 | 소요: ${elapsed(totalStart)}`);
+    // 이미 collectMetaList에서 SQLite에 저장됨
+    const s = getStats();
+    log(`\n[완료] 메타데이터 ${allDocs.length.toLocaleString()}건 수집 | DB 전체: ${s.total.toLocaleString()} | 소요: ${elapsed(totalStart)}`);
+    closeDB();
     return;
   }
 
