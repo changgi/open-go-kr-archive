@@ -13,12 +13,19 @@ export default async function DocumentDetailPage({ params }: Props) {
   const supabase = createServerSupabase();
   const { data: doc } = await supabase
     .from("documents")
-    .select("*, files(*)")
+    .select("*")
     .eq("prdctn_instt_regist_no", params.id)
     .single();
 
   if (!doc) notFound();
-  const d: any = doc;
+
+  // files는 별도 쿼리 (FK 제거됨)
+  const { data: filesData } = await supabase
+    .from("files")
+    .select("*")
+    .eq("document_id", params.id);
+
+  const d: any = { ...doc, files: filesData || [] };
   const oppLabel = OPP_SE_LABELS[d.opp_se_cd || ""] || d.opp_se_cd || "-";
   const detailUrl = d.original_url || `https://www.open.go.kr/othicInfo/infoList/infoListDetl.do?prdnNstRgstNo=${d.prdctn_instt_regist_no}`;
 
