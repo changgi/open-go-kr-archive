@@ -14,7 +14,7 @@ export default async function DocumentDetailPage({ params }: Props) {
   const { data: doc } = await supabase
     .from("documents")
     .select("*, files(*)")
-    .eq("id", params.id)
+    .eq("prdctn_instt_regist_no", params.id)
     .single();
 
   if (!doc) notFound();
