@@ -58,6 +58,11 @@ function log(m) { console.log(`[${ts()}] ${m}`); }
 function fmt(d) { return d.toISOString().slice(0,10).replace(/-/g,''); }
 function htmlDecode(s) { return (s||'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'"); }
 function sanitize(n,l=40){return n.replace(/[\\/:"*?<>|\[\]「」\r\n&;]/g,'_').slice(0,l).trim()||'untitled';}
+// 샤드 경로: 100개 단위로 분할 (샤드당 <1,000 보장)
+function shardFolder(outputDir, num, title) {
+  const shard = Math.floor(num / 100).toString().padStart(4, '0');
+  return path.join(outputDir, shard, `${num}_${sanitize(title)}`);
+}
 function formatBytes(b){if(!b)return'0B';const u=['B','KB','MB','GB'];let i=0,s=b;while(s>=1024&&i<u.length-1){s/=1024;i++;}return`${s.toFixed(1)}${u[i]}`;}
 function getFileExt(n){if(!n)return'';const d=n.lastIndexOf('.');return d>=0?n.slice(d).toLowerCase():'';}
 const OPP={'1':'공개','2':'부분공개','3':'비공개','5':'열람제한'};
@@ -318,7 +323,7 @@ async function detailWorker(workerId, docs, cookies, opts, csvPath, stats) {
       // 파일 다운로드
       let downloadCount = 0;
       const fileList = vo?.fileList || [];
-      const folderPath = path.join(opts.outputDir, `${stats.total + 1}_${sanitize(doc.title)}`);
+      const folderPath = shardFolder(opts.outputDir, stats.total + 1, doc.title);
 
       if (!opts.metaOnly && fileList.length > 0 && !opts.skipFiles) {
         fs.mkdirSync(folderPath, { recursive: true });

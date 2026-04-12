@@ -12,7 +12,7 @@ export default function DocumentCard({ doc }: { doc: any }) {
 
   return (
     <Link
-      href={`/documents/${doc.id}`}
+      href={`/documents/${doc.prdctn_instt_regist_no}`}
       className="block bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow"
     >
       <div className="flex items-start justify-between gap-3">

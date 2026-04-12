@@ -78,6 +78,11 @@ function sanitize(name, maxLen = 40) {
     .replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .slice(0, maxLen).trim() || 'untitled';
 }
+// 샤드 경로: 100개 단위로 분할 (샤드당 <1,000 보장)
+function shardFolder(outputDir, num, title) {
+  const shard = Math.floor(num / 100).toString().padStart(4, '0');
+  return path.join(outputDir, shard, `${num}_${sanitize(title)}`);
+}
 // ── Timing utilities ──
 function now() { return Date.now(); }
 function elapsed(start) {
@@ -1085,8 +1090,8 @@ async function main() {
         continue;
       }
 
-      const folderName = `${totalProcessed + 1}_${sanitize(title)}`;
-      const folderPath = path.join(opts.outputDir, folderName);
+      const folderPath = shardFolder(opts.outputDir, totalProcessed + 1, title);
+      const folderName = path.basename(folderPath);
 
       const docStart = now();
       tlog(`  [${collected + 1}] ${title.slice(0, 55)} (${insttNm})`);

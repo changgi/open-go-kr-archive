@@ -52,9 +52,25 @@ export function initDB(dbPath) {
       download_url TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS ai_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT DEFAULT (datetime('now')),
+      regno TEXT,
+      model TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      cache_read_tokens INTEGER DEFAULT 0,
+      cache_creation_tokens INTEGER DEFAULT 0,
+      cost_usd REAL,
+      success INTEGER DEFAULT 1,
+      error_msg TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_doc_status ON documents(status);
     CREATE INDEX IF NOT EXISTS idx_doc_collected ON documents(collected_at);
     CREATE INDEX IF NOT EXISTS idx_files_doc ON files(document_id);
+    CREATE INDEX IF NOT EXISTS idx_ai_ts ON ai_usage(ts);
+    CREATE INDEX IF NOT EXISTS idx_ai_success ON ai_usage(success);
   `);
 
   return db;
@@ -181,6 +197,58 @@ export function getStats() {
       SUM(CASE WHEN downloaded_count > 0 THEN 1 ELSE 0 END) as has_files
     FROM documents
   `).get();
+}
+
+// ── Claude API usage 로깅 ──
+// Claude Sonnet 4 가격 (per 1M tokens)
+const PRICES = {
+  'claude-sonnet-4-20250514': { input: 3, output: 15, cache_read: 0.30, cache_write: 3.75 },
+  'claude-sonnet-4-6': { input: 3, output: 15, cache_read: 0.30, cache_write: 3.75 },
+  'claude-opus-4-6': { input: 15, output: 75, cache_read: 1.50, cache_write: 18.75 },
+  'claude-haiku-4-5-20251001': { input: 1, output: 5, cache_read: 0.10, cache_write: 1.25 },
+};
+
+export function computeCost(model, inputTok, outputTok, cacheRead = 0, cacheWrite = 0) {
+  const p = PRICES[model] || PRICES['claude-sonnet-4-20250514'];
+  return (inputTok * p.input + outputTok * p.output + cacheRead * p.cache_read + cacheWrite * p.cache_write) / 1_000_000;
+}
+
+export function logAiUsage({ regno, model, usage, success = true, errorMsg = null }) {
+  if (!db) return;
+  const inputTok = usage?.input_tokens || 0;
+  const outputTok = usage?.output_tokens || 0;
+  const cacheRead = usage?.cache_read_input_tokens || 0;
+  const cacheWrite = usage?.cache_creation_input_tokens || 0;
+  const cost = computeCost(model, inputTok, outputTok, cacheRead, cacheWrite);
+  try {
+    db.prepare(`INSERT INTO ai_usage
+      (regno, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd, success, error_msg)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      regno || null, model, inputTok, outputTok, cacheRead, cacheWrite, cost, success ? 1 : 0, errorMsg);
+  } catch {}
+  return cost;
+}
+
+export function getAiUsageStats() {
+  if (!db) return null;
+  const total = db.prepare('SELECT COUNT(*) as cnt, SUM(cost_usd) as cost, SUM(input_tokens) as it, SUM(output_tokens) as ot FROM ai_usage').get();
+  const ok = db.prepare('SELECT COUNT(*) as cnt, SUM(cost_usd) as cost FROM ai_usage WHERE success=1').get();
+  const failed = db.prepare('SELECT COUNT(*) as cnt FROM ai_usage WHERE success=0').get();
+  // 최근 1분/10분/1시간
+  const r1m = db.prepare("SELECT COUNT(*) as cnt, SUM(cost_usd) as cost FROM ai_usage WHERE ts > datetime('now','-1 minute')").get();
+  const r10m = db.prepare("SELECT COUNT(*) as cnt, SUM(cost_usd) as cost FROM ai_usage WHERE ts > datetime('now','-10 minute')").get();
+  const r1h = db.prepare("SELECT COUNT(*) as cnt, SUM(cost_usd) as cost FROM ai_usage WHERE ts > datetime('now','-1 hour')").get();
+  return {
+    total_calls: total.cnt || 0,
+    ok_calls: ok.cnt || 0,
+    failed_calls: failed.cnt || 0,
+    total_cost: total.cost || 0,
+    total_input_tokens: total.it || 0,
+    total_output_tokens: total.ot || 0,
+    last_1m: { calls: r1m.cnt || 0, cost: r1m.cost || 0 },
+    last_10m: { calls: r10m.cnt || 0, cost: r10m.cost || 0 },
+    last_1h: { calls: r1h.cnt || 0, cost: r1h.cost || 0 },
+  };
 }
 
 // ── Supabase 동기화 ──

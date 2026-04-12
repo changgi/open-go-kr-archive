@@ -17,7 +17,8 @@ import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initDB, getMetaOnlyDocs, updateDocDetail, upsertFile, getStats, syncToSupabase, closeDB } from './local_db.mjs';
+import { initDB, getMetaOnlyDocs, updateDocDetail, upsertFile, getStats, syncToSupabase, closeDB, logAiUsage } from './local_db.mjs';
+import { extractText as extractFileText } from './file_parser.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -51,6 +52,12 @@ function elapsed(s) { const ms=Date.now()-s; return ms<60000?`${(ms/1000).toFixe
 function ts() { return new Date().toISOString().slice(11,19); }
 function log(m) { console.log(`[${ts()}] ${m}`); }
 function sanitize(n,l=40){return n.replace(/[\\/:"*?<>|\[\]「」\r\n&;]/g,'_').slice(0,l).trim()||'untitled';}
+// 샤드 경로: 100개 단위로 분할 (샤드당 <1,000 보장)
+// 예: 12345 → "0123/12345_제목"
+function shardFolder(outputDir, num, title) {
+  const shard = Math.floor(num / 100).toString().padStart(4, '0');
+  return path.join(outputDir, shard, `${num}_${sanitize(title)}`);
+}
 function formatBytes(b){if(!b)return'0B';const u=['B','KB','MB','GB'];let i=0,s=b;while(s>=1024&&i<u.length-1){s/=1024;i++;}return`${s.toFixed(1)}${u[i]}`;}
 function getFileExt(n){if(!n)return'';const d=n.lastIndexOf('.');return d>=0?n.slice(d).toLowerCase():'';}
 const OPP={'1':'공개','2':'부분공개','3':'비공개','5':'열람제한'};
@@ -60,25 +67,52 @@ function hdrs(cookies) {
   return {'Cookie':cookies,'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36','Referer':`${BASE}/othicInfo/infoList/orginlInfoList.do`};
 }
 
-// Claude 분석
+// Claude 분석 (본문이 있으면 상세, 없으면 메타만으로 추론)
+// 429/400 크레딧 부족을 감지하면 일정 시간 AI 호출 일시 정지
+let aiBlockedUntil = 0;
+const AI_MODEL = 'claude-sonnet-4-20250514';
+
 async function analyzeDoc(text, meta) {
-  if (!claude || !text || text.length < 20) return null;
+  if (!claude) return null;
+  if (Date.now() < aiBlockedUntil) return null;  // 일시 정지 중
+  const hasText = text && text.length >= 20;
+  const ctx = hasText
+    ? `문서: ${meta.info_sj||''}\n기관: ${meta.proc_instt_nm||''} ${meta.chrg_dept_nm||''}\n분류: ${meta.nst_cl_nm||''}\n본문:\n${text.slice(0,3000)}`
+    : `[본문 없음 — 메타데이터만으로 추론]\n문서: ${meta.info_sj||''}\n기관: ${meta.proc_instt_nm||''}\n부서: ${meta.chrg_dept_nm||''}\n담당자: ${meta.charger_nm||''}\n단위업무: ${meta.unit_job_nm||''}\n분류체계: ${meta.nst_cl_nm||''}\n키워드: ${meta.keywords||''}`;
+
+  const regno = meta.prdctn_instt_regist_no;
   try {
     const r = await claude.messages.create({
-      model: 'claude-sonnet-4-20250514', max_tokens: 1500,
+      model: AI_MODEL, max_tokens: 1500,
       messages: [{ role: 'user', content: `공문서를 분석하여 JSON만 출력하세요.
 
-문서: ${meta.info_sj||''}
-기관: ${meta.proc_instt_nm||''} ${meta.chrg_dept_nm||''}
-본문:
-${text.slice(0,3000)}
+${ctx}
 
+${hasText ? '' : '※ 본문이 없으므로 제목·기관·분류체계·단위업무를 근거로 합리적으로 추론하세요. 불확실한 필드는 빈 문자열로 두세요.\n'}
 JSON:
 {"sender":{"org":"","dept":"","person":"","role":""},"receiver":{"org":"","dept":"","person":"","role":""},"doc_type":"내부결재/외부발송","summary_6w":{"who":"","to_whom":"내부결재시 결재권자 전원 직위+이름","when":"","where":"","what":"구체적 2~3문장","why":"1~2문장"},"one_line_summary":"자연스러운 한 문장","purpose":"","action_required":"","brm":{"level1":"","level2":"","level3":"","level4":""},"approval_chain":[{"role":"","name":""}],"contact":{"zip":"","address":"숫자-기관명 사이 공백","phone":"","fax":"","email":"","url":""}}` }],
     });
+    // usage 로깅
+    logAiUsage({ regno, model: AI_MODEL, usage: r.usage, success: true });
     const m = r.content[0]?.text?.match(/\{[\s\S]*\}/);
-    if (m) return JSON.parse(m[0]);
-  } catch(e) { /* skip */ }
+    if (m) {
+      const result = JSON.parse(m[0]);
+      if (!hasText) result._metadata_only = true;
+      return result;
+    }
+  } catch(e) {
+    const msg = e?.message || String(e);
+    // 크레딧 부족 또는 rate limit → 5분간 차단
+    if (e?.status === 400 && /credit balance|too low/i.test(msg)) {
+      aiBlockedUntil = Date.now() + 5 * 60 * 1000;
+      logAiUsage({ regno, model: AI_MODEL, usage: null, success: false, errorMsg: 'CREDIT_LOW' });
+    } else if (e?.status === 429) {
+      aiBlockedUntil = Date.now() + 60 * 1000;  // 1분 대기
+      logAiUsage({ regno, model: AI_MODEL, usage: null, success: false, errorMsg: 'RATE_LIMIT' });
+    } else {
+      logAiUsage({ regno, model: AI_MODEL, usage: null, success: false, errorMsg: msg.slice(0, 200) });
+    }
+  }
   return null;
 }
 
@@ -186,7 +220,7 @@ async function worker(id, docs, cookies, opts, stats) {
       let downloadCount = 0;
       const fileList = vo?.fileList || [];
       const pDate = (prdnDt||'').slice(0,8);
-      const folderPath = path.join(opts.outputDir, `${stats.total+1}_${sanitize(doc.info_sj||'')}`);
+      const folderPath = shardFolder(opts.outputDir, stats.total+1, doc.info_sj||'');
       fs.mkdirSync(folderPath, {recursive:true});
 
       let bodyText = '';
@@ -217,9 +251,14 @@ async function worker(id, docs, cookies, opts, stats) {
               const fname = sanitize(`${f.fileSeDc||'기타'}_${f.fileNm}`,200);
               fs.writeFileSync(path.join(folderPath, fname), buf);
               downloadCount++;
-              if(getFileExt(f.fileNm)==='.pdf'){
-                try{const pd=await pdfParse(buf);if(pd.text){bodyText=pd.text;fs.writeFileSync(path.join(folderPath,fname+'_내용.md'),`# ${f.fileNm}\n\n${pd.text}`,'utf8');}}catch{}
-              }
+              // 통합 파서 (PDF, HWP, HWPX, XLSX, DOCX, PPTX 등)
+              try {
+                const text = await extractFileText(buf, f.fileNm);
+                if (text && text.length > 20) {
+                  if (!bodyText || text.length > bodyText.length) bodyText = text;
+                  fs.writeFileSync(path.join(folderPath, fname+'_내용.md'), `# ${f.fileNm}\n\n${text}`, 'utf8');
+                }
+              } catch {}
             }
           }catch{}
           await sleep(REQUEST_DELAY);
@@ -228,7 +267,7 @@ async function worker(id, docs, cookies, opts, stats) {
 
       // AI 분석
       let aiResult = null;
-      if (!opts.skipAi && bodyText && claude) {
+      if (!opts.skipAi && claude) {
         aiResult = await analyzeDoc(bodyText, doc);
       }
 

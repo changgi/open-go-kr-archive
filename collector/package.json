@@ -4,6 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "status": "node status.mjs",
+    "watch": "node status.mjs --watch 10",
+    "detail": "node detail_collect.mjs -w 16 -o ./full_collection",
+    "year": "node year_range_collect.mjs -o ./full_collection",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -12,8 +16,10 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
+    "adm-zip": "^0.5.17",
     "better-sqlite3": "^12.8.0",
     "dotenv": "^17.4.1",
+    "hwp.js": "^0.0.3",
     "pdf-parse": "^1.1.1"
   }
 }

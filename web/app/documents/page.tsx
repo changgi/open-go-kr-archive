@@ -1,5 +1,4 @@
 import { createServerSupabase } from "@/lib/supabase/server";
-import { Document } from "@/lib/types";
 import DocumentCard from "@/components/DocumentCard";
 import SearchBar from "@/components/SearchBar";
 import Pagination from "@/components/Pagination";
@@ -25,7 +24,6 @@ export default async function DocumentsPage({ searchParams }: Props) {
     .select("*", { count: "exact" })
     .order("collected_at", { ascending: false });
 
-  // Pagination
   if (offset > 0) {
     query = query.range(offset, offset + PAGE_SIZE - 1);
   } else {
@@ -42,7 +40,7 @@ export default async function DocumentsPage({ searchParams }: Props) {
   }
 
   const { data, count } = await query;
-  const docs = (data || []) as Document[];
+  const docs = data || [];
   const totalPages = Math.ceil((count || 0) / PAGE_SIZE);
 
   return (
@@ -91,8 +89,8 @@ export default async function DocumentsPage({ searchParams }: Props) {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {docs.map((doc) => (
-            <DocumentCard key={doc.id} doc={doc} />
+          {docs.map((doc: any) => (
+            <DocumentCard key={doc.prdctn_instt_regist_no} doc={doc} />
           ))}
         </div>
       )}

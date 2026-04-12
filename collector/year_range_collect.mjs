@@ -31,7 +31,12 @@ const BASE = 'https://www.open.go.kr';
 const OPP = {'1':'공개','2':'부분공개','3':'비공개','5':'열람제한'};
 
 function ts() { return new Date().toISOString().slice(11,19); }
-function log(m) { console.log(`[${ts()}] ${m}`); }
+let logFile = null;
+function log(m) {
+  const line = `[${ts()}] ${m}`;
+  console.log(line);
+  if (logFile) { try { fs.appendFileSync(logFile, line + '\n'); } catch {} }
+}
 function htmlDecode(s) { return (s||'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'"); }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -48,6 +53,7 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === '--resume') resumeFrom = args[++i]; // e.g. "2015-03"
 }
 fs.mkdirSync(outputDir, { recursive: true });
+logFile = path.join(outputDir, 'year_range_live.log');
 
 // 월 범위 생성 [startYear-01, ..., endYear-12]
 function buildMonthRanges(fromYear, toYear) {
